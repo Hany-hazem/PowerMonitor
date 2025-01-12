@@ -1,140 +1,134 @@
+import customtkinter as ctk
+import threading
 import time
 import json
-import csv
 import os
+import sys
 import pynvml
 from datetime import datetime
-from colorama import init, Fore, Style
 
-# --- CONFIGURATION ---
-PRICE_PER_KWH = 2.14  # EGP
+# --- CONFIG ---
+PRICE_PER_KWH = 2.14
 STATE_FILE = "power_state.json"
 LOG_FILE = "power_history.csv"
-POLL_INTERVAL = 1.0   # Seconds between updates
-LOG_INTERVAL = 60     # Seconds between writing to CSV
 
-init() # Init colors
+# Force DLL lookup (Fixes your driver issue)
+os.environ["PATH"] += os.pathsep + os.getcwd()
 
-class PersistentMonitor:
+ctk.set_appearance_mode("Dark")
+ctk.set_default_color_theme("blue")
+
+class PowerMonitorApp(ctk.CTk):
     def __init__(self):
+        super().__init__()
+
+        # Window Setup
+        self.title("⚡ Power Monitor")
+        self.geometry("400x350")
+        self.resizable(False, False)
+
+        # Data State
+        self.running = True
+        self.state = self.load_state()
         self.gpu_handle = None
         self.nvml_active = False
         self.setup_nvml()
+
+        # --- UI LAYOUT ---
+        # Title
+        self.lbl_title = ctk.CTkLabel(self, text="Real-Time Consumption", font=("Roboto", 20, "bold"))
+        self.lbl_title.pack(pady=15)
+
+        # Watts Display (The Big Number)
+        self.lbl_watts = ctk.CTkLabel(self, text="0 W", font=("Roboto", 48, "bold"), text_color="#00E5FF")
+        self.lbl_watts.pack(pady=5)
+
+        # Cost Display
+        self.frame_info = ctk.CTkFrame(self)
+        self.frame_info.pack(pady=20, padx=20, fill="x")
+
+        self.lbl_cost_title = ctk.CTkLabel(self.frame_info, text="Total Cost (EGP):", font=("Arial", 14))
+        self.lbl_cost_title.pack(pady=(10, 0))
         
-        # Load previous data or start fresh
-        self.state = self.load_state()
-        
-        # Setup CSV Logging
-        self.setup_logging()
+        self.lbl_cost_val = ctk.CTkLabel(self.frame_info, text=f"{self.state['total_cost']:.2f}", font=("Arial", 24, "bold"), text_color="#00FF00")
+        self.lbl_cost_val.pack(pady=(0, 10))
+
+        # Status Bar
+        self.lbl_status = ctk.CTkLabel(self, text="Status: Monitoring Active", text_color="gray")
+        self.lbl_status.pack(side="bottom", pady=10)
+
+        # Threading
+        self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
+        self.monitor_thread.start()
+
+        # Handle Window Close
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_nvml(self):
         try:
             pynvml.nvmlInit()
             self.gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             self.nvml_active = True
-            print(f"{Fore.GREEN}✅ GPU Linked: {pynvml.nvmlDeviceGetName(self.gpu_handle).decode()}{Style.RESET_ALL}")
         except:
-            print(f"{Fore.RED}⚠️ GPU Driver not found. using defaults.{Style.RESET_ALL}")
+            self.nvml_active = False
 
     def load_state(self):
         if os.path.exists(STATE_FILE):
             try:
-                with open(STATE_FILE, 'r') as f:
-                    print(f"{Fore.CYAN}📂 Loaded previous session data.{Style.RESET_ALL}")
-                    return json.load(f)
-            except:
-                pass
-        return {"total_kwh": 0.0, "total_cost": 0.0, "start_date": str(datetime.now())}
+                with open(STATE_FILE, 'r') as f: return json.load(f)
+            except: pass
+        return {"total_kwh": 0.0, "total_cost": 0.0}
 
     def save_state(self):
         with open(STATE_FILE, 'w') as f:
             json.dump(self.state, f, indent=4)
 
-    def setup_logging(self):
-        if not os.path.exists(LOG_FILE):
-            with open(LOG_FILE, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(["Timestamp", "GPU_Watts", "Est_Total_Watts", "Session_Cost"])
+    def background_monitor(self):
+        last_log = time.time()
+        while self.running:
+            # 1. Get Power
+            gpu_w = 0
+            if self.nvml_active:
+                try:
+                    gpu_w = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
+                    util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
+                except: util = 0
+            else: util = 0
 
-    def log_to_csv(self, gpu_w, total_w):
-        with open(LOG_FILE, 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                round(gpu_w, 2),
-                round(total_w, 2),
-                round(self.state["total_cost"], 4)
-            ])
+            # Estimate CPU/System
+            cpu_est = 35 if util < 10 else (60 if util < 50 else 100)
+            base_draw = 65
+            total_w = gpu_w + cpu_est + base_draw
 
-    def get_power_data(self):
-        gpu_watts = 0
-        gpu_util = 0
-        
-        if self.nvml_active:
-            try:
-                gpu_watts = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
-                gpu_util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
-            except: pass
+            # 2. Math
+            kwh_inc = (total_w * 1.0) / 3_600_000
+            cost_inc = kwh_inc * PRICE_PER_KWH
+            
+            self.state["total_kwh"] += kwh_inc
+            self.state["total_cost"] += cost_inc
 
-        # --- ESTIMATION LOGIC (Refined for Ryzen 9900X + 4070 Ti Super) ---
-        # Base system (Mobo X870 + RAM + Fans + AIO Pump + SSDs) ~ 65W
-        base_draw = 65 
-        
-        # CPU Estimation based on GPU load (Heuristic)
-        # If GPU is 0-10% (Desktop), CPU likely idle (~35W)
-        # If GPU is 90%+ (Gaming), CPU likely gaming load (~80-100W)
-        if gpu_util < 10: cpu_est = 35
-        elif gpu_util < 50: cpu_est = 60
-        else: cpu_est = 100 
-        
-        total_watts = gpu_watts + cpu_est + base_draw
-        return gpu_watts, total_watts, gpu_util
+            # 3. Update GUI (Safe way)
+            self.lbl_watts.configure(text=f"{int(total_w)} W")
+            self.lbl_cost_val.configure(text=f"{self.state['total_cost']:.4f}")
+            
+            # Color logic
+            color = "#00E5FF" # Cyan
+            if total_w > 300: color = "#FFD700" # Gold
+            if total_w > 500: color = "#FF4444" # Red
+            self.lbl_watts.configure(text_color=color)
 
-    def run(self):
-        print(f"\n{Fore.YELLOW}⚡ Persistent Power Monitor V2 ⚡{Style.RESET_ALL}")
-        print(f"Tracking Cost at: {PRICE_PER_KWH} EGP/kWh")
-        print(f"Accumulated Cost so far: {Fore.GREEN}{self.state['total_cost']:.2f} EGP{Style.RESET_ALL}\n")
+            # 4. Save/Log periodically
+            if time.time() - last_log > 60:
+                self.save_state()
+                last_log = time.time()
 
-        last_log_time = time.time()
-        
-        try:
-            while True:
-                gpu_w, total_w, gpu_util = self.get_power_data()
-                
-                # Math: Calculate kWh for this specific 1-second interval
-                # kWh = (Watts * Seconds) / (3,600,000)
-                kwh_increment = (total_w * POLL_INTERVAL) / 3_600_000
-                cost_increment = kwh_increment * PRICE_PER_KWH
-                
-                # Update State
-                self.state["total_kwh"] += kwh_increment
-                self.state["total_cost"] += cost_increment
-                
-                # Visual Output
-                color = Fore.WHITE
-                if total_w > 300: color = Fore.YELLOW
-                if total_w > 500: color = Fore.RED
+            time.sleep(1)
 
-                print(
-                    f"\rGPU: {gpu_w:5.1f}W ({gpu_util}%) | "
-                    f"{color}Total: {total_w:5.0f}W{Style.RESET_ALL} | "
-                    f"Session Cost: {Fore.GREEN}{self.state['total_cost']:8.4f} EGP{Style.RESET_ALL} ",
-                    end=""
-                )
-
-                # Periodic Tasks (Save & Log)
-                current_time = time.time()
-                if current_time - last_log_time >= LOG_INTERVAL:
-                    self.save_state() # Save JSON
-                    self.log_to_csv(gpu_w, total_w) # Write CSV
-                    last_log_time = current_time
-
-                time.sleep(POLL_INTERVAL)
-
-        except KeyboardInterrupt:
-            self.save_state()
-            print(f"\n\n{Fore.CYAN}💾 Data saved! Final Total: {self.state['total_cost']:.4f} EGP{Style.RESET_ALL}")
+    def on_close(self):
+        self.running = False
+        self.save_state()
+        self.destroy()
 
 if __name__ == "__main__":
-    app = PersistentMonitor()
-    app.run()
+    app = PowerMonitorApp()
+    app.mainloop()
