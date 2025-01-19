@@ -12,7 +12,7 @@ PRICE_PER_KWH = 2.14
 STATE_FILE = "power_state.json"
 LOG_FILE = "power_history.csv"
 
-# Force DLL lookup (Fixes your driver issue)
+# Force DLL lookup
 os.environ["PATH"] += os.pathsep + os.getcwd()
 
 ctk.set_appearance_mode("Dark")
@@ -27,33 +27,30 @@ class PowerMonitorApp(ctk.CTk):
         self.geometry("400x350")
         self.resizable(False, False)
 
-        # Data State
+        # Data State (Renamed to avoid conflict)
         self.running = True
-        self.state = self.load_state()
+        self.power_data = self.load_data()
         self.gpu_handle = None
         self.nvml_active = False
         self.setup_nvml()
 
         # --- UI LAYOUT ---
-        # Title
         self.lbl_title = ctk.CTkLabel(self, text="Real-Time Consumption", font=("Roboto", 20, "bold"))
         self.lbl_title.pack(pady=15)
 
-        # Watts Display (The Big Number)
         self.lbl_watts = ctk.CTkLabel(self, text="0 W", font=("Roboto", 48, "bold"), text_color="#00E5FF")
         self.lbl_watts.pack(pady=5)
 
-        # Cost Display
         self.frame_info = ctk.CTkFrame(self)
         self.frame_info.pack(pady=20, padx=20, fill="x")
 
         self.lbl_cost_title = ctk.CTkLabel(self.frame_info, text="Total Cost (EGP):", font=("Arial", 14))
         self.lbl_cost_title.pack(pady=(10, 0))
         
-        self.lbl_cost_val = ctk.CTkLabel(self.frame_info, text=f"{self.state['total_cost']:.2f}", font=("Arial", 24, "bold"), text_color="#00FF00")
+        # Initial Value
+        self.lbl_cost_val = ctk.CTkLabel(self.frame_info, text=f"{self.power_data['total_cost']:.4f}", font=("Arial", 24, "bold"), text_color="#00FF00")
         self.lbl_cost_val.pack(pady=(0, 10))
 
-        # Status Bar
         self.lbl_status = ctk.CTkLabel(self, text="Status: Monitoring Active", text_color="gray")
         self.lbl_status.pack(side="bottom", pady=10)
 
@@ -69,22 +66,31 @@ class PowerMonitorApp(ctk.CTk):
             pynvml.nvmlInit()
             self.gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             self.nvml_active = True
-        except:
+            
+            # Safe Decode Check
+            raw_name = pynvml.nvmlDeviceGetName(self.gpu_handle)
+            name = raw_name.decode() if isinstance(raw_name, bytes) else raw_name
+            print(f"GPU Found: {name}")
+            
+        except Exception as e:
+            print(f"NVML Error: {e}")
             self.nvml_active = False
+            self.lbl_status.configure(text="Status: GPU Driver Not Found (Estimating)")
 
-    def load_state(self):
+    def load_data(self):
         if os.path.exists(STATE_FILE):
             try:
                 with open(STATE_FILE, 'r') as f: return json.load(f)
             except: pass
         return {"total_kwh": 0.0, "total_cost": 0.0}
 
-    def save_state(self):
+    def save_data(self):
         with open(STATE_FILE, 'w') as f:
-            json.dump(self.state, f, indent=4)
+            json.dump(self.power_data, f, indent=4)
 
     def background_monitor(self):
         last_log = time.time()
+        
         while self.running:
             # 1. Get Power
             gpu_w = 0
@@ -104,29 +110,32 @@ class PowerMonitorApp(ctk.CTk):
             kwh_inc = (total_w * 1.0) / 3_600_000
             cost_inc = kwh_inc * PRICE_PER_KWH
             
-            self.state["total_kwh"] += kwh_inc
-            self.state["total_cost"] += cost_inc
+            self.power_data["total_kwh"] += kwh_inc
+            self.power_data["total_cost"] += cost_inc
 
-            # 3. Update GUI (Safe way)
-            self.lbl_watts.configure(text=f"{int(total_w)} W")
-            self.lbl_cost_val.configure(text=f"{self.state['total_cost']:.4f}")
-            
-            # Color logic
-            color = "#00E5FF" # Cyan
-            if total_w > 300: color = "#FFD700" # Gold
-            if total_w > 500: color = "#FF4444" # Red
-            self.lbl_watts.configure(text_color=color)
+            # 3. Update GUI (Must use .after or just try/except in threaded loop)
+            try:
+                self.lbl_watts.configure(text=f"{int(total_w)} W")
+                self.lbl_cost_val.configure(text=f"{self.power_data['total_cost']:.4f}")
+                
+                # Color logic
+                color = "#00E5FF" # Cyan
+                if total_w > 300: color = "#FFD700" # Gold
+                if total_w > 500: color = "#FF4444" # Red
+                self.lbl_watts.configure(text_color=color)
+            except:
+                pass # Window likely closed
 
             # 4. Save/Log periodically
             if time.time() - last_log > 60:
-                self.save_state()
+                self.save_data()
                 last_log = time.time()
 
             time.sleep(1)
 
     def on_close(self):
         self.running = False
-        self.save_state()
+        self.save_data()
         self.destroy()
 
 if __name__ == "__main__":
