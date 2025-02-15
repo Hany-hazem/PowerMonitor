@@ -4,12 +4,14 @@ import time
 import json
 import os
 import pynvml
-import wmi
+import requests  # <--- NEW: Uses Web Requests instead of WMI
 from datetime import datetime
 
 # --- CONFIG ---
 PRICE_PER_KWH = 2.14
 STATE_FILE = "power_state.json"
+LHM_URL = "http://localhost:8085/data.json"  # Default LHM Port
+
 # Force DLL lookup
 os.environ["PATH"] += os.pathsep + os.getcwd()
 
@@ -19,21 +21,11 @@ ctk.set_default_color_theme("blue")
 class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("⚡ Power Monitor (Hybrid)")
+        self.title("⚡ Power Monitor (Web API)")
         self.geometry("450x450")
         self.resizable(False, False)
 
-        # 1. Try to Connect to Real Sensors (LHM)
-        self.wmi_client = None
-        try:
-            # Try connecting to LibreHardwareMonitor WMI
-            self.wmi_client = wmi.WMI(namespace=r"root\OpenHardwareMonitor")
-            print("✅ Connected to Real CPU Sensors (LibreHardwareMonitor)")
-        except Exception as e:
-            print(f"⚠️ Could not find LibreHardwareMonitor: {e}")
-            print("   -> Switched to ESTIMATION mode for CPU.")
-            self.wmi_client = None
-
+        # Hardware Setup
         self.gpu_handle = None
         self.nvml_active = False
         self.setup_nvml()
@@ -98,50 +90,68 @@ class PowerMonitorApp(ctk.CTk):
     def save_data(self):
         with open(STATE_FILE, 'w') as f: json.dump(self.power_data, f, indent=4)
 
-    def get_real_cpu_power(self):
-        """Attempts to read Real CPU Power from LHM"""
-        if self.wmi_client is None: return 0
+    def get_cpu_power_from_web(self):
+        """Fetches JSON from LHM Web Server and finds CPU Package Power"""
         try:
-            sensors = self.wmi_client.Sensor()
-            for sensor in sensors:
-                if sensor.SensorType == u'Power' and u'Package' in sensor.Name:
-                    return float(sensor.Value)
+            response = requests.get(LHM_URL, timeout=0.5)
+            if response.status_code == 200:
+                data = response.json()
+                # Traverse the JSON tree to find the CPU Package Power
+                # The structure is: Children -> Children -> ...
+                # We write a recursive search for "CPU Package"
+                return self.find_power_value(data)
         except:
             return 0
+        return 0
+
+    def find_power_value(self, node):
+        """Recursive search for CPU Package Power"""
+        # 1. Check if this node is the one we want
+        if isinstance(node, dict):
+            if node.get("Text") == "CPU Package" and "W" in str(node.get("Value", "")):
+                # Clean string "35.5 W" -> 35.5
+                val_str = node.get("Value", "0").split()[0]
+                return float(val_str)
+            
+            # 2. Search Children
+            if "Children" in node:
+                for child in node["Children"]:
+                    result = self.find_power_value(child)
+                    if result > 0: return result
+        
+        # 3. Handle Lists (Root is a list)
+        elif isinstance(node, list):
+            for item in node:
+                result = self.find_power_value(item)
+                if result > 0: return result
+                
         return 0
 
     def background_monitor(self):
         last_log = time.time()
         while self.running:
-            # 1. GPU Power (Always Accurate)
+            # 1. GPU Power
             gpu_w = 0
-            gpu_util = 0
             if self.nvml_active:
                 try: 
                     gpu_w = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
-                    gpu_util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
                 except: pass
 
-            # 2. CPU Power (Hybrid Approach)
-            real_cpu_w = self.get_real_cpu_power()
+            # 2. CPU Power (Web API)
+            real_cpu_w = self.get_cpu_power_from_web()
             
+            # Logic: If Web API works, use it. If not, fallback.
             if real_cpu_w > 0:
-                # SUCCESS: We have real data!
-                # We still add ~45W for Mobo/RAM/Fans because "Package" is ONLY the chip
-                system_w = real_cpu_w + 45 
+                system_w = real_cpu_w + 45 # Add Mobo/RAM/Fan Overhead
                 is_estimated = False
             else:
-                # FAILURE: LHM is closed. Use Estimate Logic (Calibrated)
-                base_draw = 45
-                if gpu_util < 10: cpu_est = 35    # Idle
-                elif gpu_util < 50: cpu_est = 55  # Medium
-                else: cpu_est = 75                # Gaming
-                system_w = cpu_est + base_draw
+                # Fallback to estimate if LHM is closed
+                system_w = 115 
                 is_estimated = True
 
             total_w = gpu_w + system_w
 
-            # 3. Math & GUI Update
+            # 3. Math & Update
             kwh_inc = (total_w * 1.0) / 3_600_000
             self.power_data["total_cost"] += kwh_inc * PRICE_PER_KWH
             
@@ -151,10 +161,8 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_cpu_val.configure(text=f"{int(system_w)} W")
                 self.lbl_cost_val.configure(text=f"{self.power_data['total_cost']:.4f}")
                 
-                # Visual Feedback: Grey out CPU text if we are guessing
                 if is_estimated:
                      self.lbl_cpu_val.configure(text_color="gray")
-                     self.lbl_status = "Status: Using Estimates (Open LHM for Real Data)"
                 else:
                      self.lbl_cpu_val.configure(text_color="#ff8c00")
             except: pass
