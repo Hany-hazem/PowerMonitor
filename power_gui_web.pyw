@@ -4,16 +4,12 @@ import time
 import json
 import os
 import pynvml
-import requests  # <--- NEW: Uses Web Requests instead of WMI
+import winreg  # <--- Native Windows Registry Library
 from datetime import datetime
 
 # --- CONFIG ---
 PRICE_PER_KWH = 2.14
 STATE_FILE = "power_state.json"
-LHM_URL = "http://localhost:8085/data.json"  # Default LHM Port
-
-# Force DLL lookup
-os.environ["PATH"] += os.pathsep + os.getcwd()
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -21,7 +17,7 @@ ctk.set_default_color_theme("blue")
 class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("⚡ Power Monitor (Web API)")
+        self.title("⚡ Power Monitor (HWiNFO Edition)")
         self.geometry("450x450")
         self.resizable(False, False)
 
@@ -30,9 +26,8 @@ class PowerMonitorApp(ctk.CTk):
         self.nvml_active = False
         self.setup_nvml()
         
-        # Data
-        self.running = True
         self.power_data = self.load_data()
+        self.running = True
 
         # --- UI LAYOUT ---
         self.lbl_title = ctk.CTkLabel(self, text="Real-Time Consumption", font=("Roboto", 20, "bold"))
@@ -57,15 +52,13 @@ class PowerMonitorApp(ctk.CTk):
         # CPU
         self.frame_cpu = ctk.CTkFrame(self.frame_details)
         self.frame_cpu.pack(side="right", expand=True, fill="both", padx=5)
-        ctk.CTkLabel(self.frame_cpu, text="CPU + Sys", font=("Arial", 12, "bold"), text_color="#ff8c00").pack(pady=(10,0))
+        ctk.CTkLabel(self.frame_cpu, text="CPU (HWiNFO)", font=("Arial", 12, "bold"), text_color="#ff8c00").pack(pady=(10,0))
         self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 24, "bold"))
         self.lbl_cpu_val.pack(pady=(0, 10))
 
         # Cost
         self.frame_info = ctk.CTkFrame(self)
         self.frame_info.pack(pady=20, padx=20, fill="x")
-        self.lbl_cost_title = ctk.CTkLabel(self.frame_info, text="Total Cost (EGP):", font=("Arial", 14))
-        self.lbl_cost_title.pack(pady=(10, 0))
         self.lbl_cost_val = ctk.CTkLabel(self.frame_info, text=f"{self.power_data['total_cost']:.4f}", font=("Arial", 28, "bold"), text_color="#00FF00")
         self.lbl_cost_val.pack(pady=(0, 10))
 
@@ -90,68 +83,56 @@ class PowerMonitorApp(ctk.CTk):
     def save_data(self):
         with open(STATE_FILE, 'w') as f: json.dump(self.power_data, f, indent=4)
 
-    def get_cpu_power_from_web(self):
-        """Fetches JSON from LHM Web Server and finds CPU Package Power"""
+    def get_cpu_power_hwinfo(self):
+        """Reads CPU Power from HWiNFO Registry Keys"""
         try:
-            response = requests.get(LHM_URL, timeout=0.5)
-            if response.status_code == 200:
-                data = response.json()
-                # Traverse the JSON tree to find the CPU Package Power
-                # The structure is: Children -> Children -> ...
-                # We write a recursive search for "CPU Package"
-                return self.find_power_value(data)
+            # HWiNFO puts data in HKEY_CURRENT_USER\Software\HWiNFO64\Sensors
+            # We iterate through keys to find 'CPU Package Power'
+            key_path = r"Software\HWiNFO64\Sensors"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                i = 0
+                while True:
+                    try:
+                        subkey_name = winreg.EnumKey(key, i)
+                        with winreg.OpenKey(key, subkey_name) as subkey:
+                            # Read Label
+                            label = winreg.QueryValueEx(subkey, "Label")[0]
+                            if "CPU Package Power" in label:
+                                # Read Value (It's stored as a string like "45.2 W")
+                                val_str = winreg.QueryValueEx(subkey, "Value")[0]
+                                # Clean the string (Remove " W" and parse float)
+                                clean_val = "".join([c for c in val_str if c.isdigit() or c == '.'])
+                                return float(clean_val)
+                        i += 1
+                    except OSError:
+                        break # End of keys
         except:
-            return 0
-        return 0
-
-    def find_power_value(self, node):
-        """Recursive search for CPU Package Power"""
-        # 1. Check if this node is the one we want
-        if isinstance(node, dict):
-            if node.get("Text") == "CPU Package" and "W" in str(node.get("Value", "")):
-                # Clean string "35.5 W" -> 35.5
-                val_str = node.get("Value", "0").split()[0]
-                return float(val_str)
-            
-            # 2. Search Children
-            if "Children" in node:
-                for child in node["Children"]:
-                    result = self.find_power_value(child)
-                    if result > 0: return result
-        
-        # 3. Handle Lists (Root is a list)
-        elif isinstance(node, list):
-            for item in node:
-                result = self.find_power_value(item)
-                if result > 0: return result
-                
-        return 0
+            return 0.0
+        return 0.0
 
     def background_monitor(self):
         last_log = time.time()
         while self.running:
-            # 1. GPU Power
+            # 1. GPU
             gpu_w = 0
             if self.nvml_active:
-                try: 
-                    gpu_w = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
+                try: gpu_w = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
                 except: pass
 
-            # 2. CPU Power (Web API)
-            real_cpu_w = self.get_cpu_power_from_web()
+            # 2. CPU (HWiNFO Registry)
+            real_cpu_w = self.get_cpu_power_hwinfo()
             
-            # Logic: If Web API works, use it. If not, fallback.
             if real_cpu_w > 0:
-                system_w = real_cpu_w + 45 # Add Mobo/RAM/Fan Overhead
+                system_w = real_cpu_w + 45 
                 is_estimated = False
             else:
-                # Fallback to estimate if LHM is closed
+                # Fallback Estimate
                 system_w = 115 
                 is_estimated = True
 
             total_w = gpu_w + system_w
-
-            # 3. Math & Update
+            
+            # Math & Update
             kwh_inc = (total_w * 1.0) / 3_600_000
             self.power_data["total_cost"] += kwh_inc * PRICE_PER_KWH
             
