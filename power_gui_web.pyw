@@ -10,13 +10,11 @@ from datetime import datetime
 # --- CONFIGURATION ---
 PRICE_PER_KWH = 2.14          # Your electricity rate
 STATE_FILE = "power_state.json"
-LHM_URL = "http://localhost:8085/data.json"  # Default LibreHardwareMonitor URL
+LHM_URL = "http://localhost:8085/data.json"  # LibreHardwareMonitor Web Server
 
 # --- SYSTEM SETUP ---
-# Force Python to look in the script directory for nvml.dll (Fixes Driver Not Found)
 os.environ["PATH"] += os.pathsep + os.getcwd()
 
-# GUI Appearance Settings
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
@@ -24,12 +22,12 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 1. Window Setup
-        self.title("⚡ Power Monitor (Web API)")
-        self.geometry("460x480")
+        # 1. Window Setup (Made wider for 3 columns)
+        self.title("⚡ Power Monitor (Full Spectrum)")
+        self.geometry("600x480") 
         self.resizable(False, False)
 
-        # 2. Initialize Hardware & Data
+        # 2. Hardware Init
         self.gpu_handle = None
         self.nvml_active = False
         self.setup_nvml()
@@ -40,73 +38,65 @@ class PowerMonitorApp(ctk.CTk):
         # --- UI LAYOUT ---
         # Title
         self.lbl_title = ctk.CTkLabel(self, text="Real-Time Consumption", font=("Roboto", 22, "bold"))
-        self.lbl_title.pack(pady=(25, 10))
+        self.lbl_title.pack(pady=(20, 10))
 
         # Big Total Watts
         self.lbl_watts = ctk.CTkLabel(self, text="--- W", font=("Roboto", 54, "bold"), text_color="#00E5FF")
         self.lbl_watts.pack(pady=5)
         
         self.lbl_total_sub = ctk.CTkLabel(self, text="Total System Power", font=("Arial", 12), text_color="gray")
-        self.lbl_total_sub.pack(pady=(0, 25))
+        self.lbl_total_sub.pack(pady=(0, 20))
 
-        # Split View: GPU vs CPU
+        # --- 3-COLUMN SPLIT VIEW ---
         self.frame_details = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_details.pack(pady=5, padx=20, fill="x")
+        self.frame_details.pack(pady=5, padx=10, fill="x")
 
-        # -- GPU Section (Left) --
-        self.frame_gpu = ctk.CTkFrame(self.frame_details)
-        self.frame_gpu.pack(side="left", expand=True, fill="both", padx=8)
-        
-        ctk.CTkLabel(self.frame_gpu, text="GPU (NVIDIA)", font=("Arial", 12, "bold"), text_color="#76b900").pack(pady=(12,0))
-        self.lbl_gpu_val = ctk.CTkLabel(self.frame_gpu, text="0 W", font=("Roboto", 26, "bold"))
-        self.lbl_gpu_val.pack(pady=(0, 12))
+        # Col 1: Discrete GPU (NVIDIA)
+        self.frame_dgpu = ctk.CTkFrame(self.frame_details)
+        self.frame_dgpu.pack(side="left", expand=True, fill="both", padx=5)
+        ctk.CTkLabel(self.frame_dgpu, text="RTX 4070 Ti", font=("Arial", 11, "bold"), text_color="#76b900").pack(pady=(10,0))
+        self.lbl_dgpu_val = ctk.CTkLabel(self.frame_dgpu, text="0 W", font=("Roboto", 22, "bold"))
+        self.lbl_dgpu_val.pack(pady=(0, 10))
 
-        # -- CPU Section (Right) --
+        # Col 2: Integrated GPU (AMD iGPU)
+        self.frame_igpu = ctk.CTkFrame(self.frame_details)
+        self.frame_igpu.pack(side="left", expand=True, fill="both", padx=5)
+        ctk.CTkLabel(self.frame_igpu, text="iGPU (Radeon)", font=("Arial", 11, "bold"), text_color="#FF3333").pack(pady=(10,0))
+        self.lbl_igpu_val = ctk.CTkLabel(self.frame_igpu, text="0 W", font=("Roboto", 22, "bold"))
+        self.lbl_igpu_val.pack(pady=(0, 10))
+
+        # Col 3: CPU (Ryzen)
         self.frame_cpu = ctk.CTkFrame(self.frame_details)
-        self.frame_cpu.pack(side="right", expand=True, fill="both", padx=8)
-        
-        ctk.CTkLabel(self.frame_cpu, text="CPU + Sys", font=("Arial", 12, "bold"), text_color="#ff8c00").pack(pady=(12,0))
-        self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 26, "bold"))
-        self.lbl_cpu_val.pack(pady=(0, 12))
+        self.frame_cpu.pack(side="right", expand=True, fill="both", padx=5)
+        ctk.CTkLabel(self.frame_cpu, text="Ryzen 9900X", font=("Arial", 11, "bold"), text_color="#ff8c00").pack(pady=(10,0))
+        self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 22, "bold"))
+        self.lbl_cpu_val.pack(pady=(0, 10))
 
         # Cost Section
         self.frame_info = ctk.CTkFrame(self)
         self.frame_info.pack(pady=25, padx=25, fill="x")
         
         self.lbl_cost_title = ctk.CTkLabel(self.frame_info, text="Total Cost (EGP):", font=("Arial", 14))
-        self.lbl_cost_title.pack(pady=(12, 0))
-        
+        self.lbl_cost_title.pack(pady=(10, 0))
         self.lbl_cost_val = ctk.CTkLabel(self.frame_info, text=f"{self.power_data['total_cost']:.4f}", font=("Arial", 30, "bold"), text_color="#00FF00")
-        self.lbl_cost_val.pack(pady=(0, 12))
+        self.lbl_cost_val.pack(pady=(0, 10))
 
         # Status Bar
         self.lbl_status = ctk.CTkLabel(self, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack(side="bottom", pady=8)
 
-        # 3. Start Background Thread
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
         self.monitor_thread.start()
-
-        # Handle Closing
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_nvml(self):
-        """Initializes NVIDIA Driver connection"""
         try:
             pynvml.nvmlInit()
             self.gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
             self.nvml_active = True
-            
-            # Safe name decoding
-            raw_name = pynvml.nvmlDeviceGetName(self.gpu_handle)
-            name = raw_name.decode() if isinstance(raw_name, bytes) else raw_name
-            print(f"✅ GPU Linked: {name}")
-        except Exception as e:
-            print(f"⚠️ GPU Driver Error: {e}")
-            self.nvml_active = False
+        except: self.nvml_active = False
 
     def load_data(self):
-        """Loads previous session cost"""
         if os.path.exists(STATE_FILE):
             try:
                 with open(STATE_FILE, 'r') as f: return json.load(f)
@@ -114,121 +104,141 @@ class PowerMonitorApp(ctk.CTk):
         return {"total_kwh": 0.0, "total_cost": 0.0}
 
     def save_data(self):
-        """Saves current session cost"""
-        with open(STATE_FILE, 'w') as f:
-            json.dump(self.power_data, f, indent=4)
+        with open(STATE_FILE, 'w') as f: json.dump(self.power_data, f, indent=4)
 
-    def get_cpu_power_from_web(self):
-        """Fetches JSON from LibreHardwareMonitor and finds CPU Package Power"""
+    def fetch_lhm_data(self):
+        """Gets all sensor data from LibreHardwareMonitor Web API"""
         try:
-            # Short timeout to prevent freezing if LHM is closed
             response = requests.get(LHM_URL, timeout=0.2)
             if response.status_code == 200:
-                data = response.json()
-                return self.find_power_value(data)
+                return response.json()
         except:
-            return 0 # Connection failed
-        return 0
+            return None
+        return None
 
-    def find_power_value(self, node):
-        """Recursive search for 'CPU Package' in the JSON tree"""
-        # 1. Check current node
+    def find_sensor_value(self, node, target_names, sensor_type="Power"):
+        """Recursive search for a specific sensor (e.g., 'Package' or 'GPU Power')"""
+        # Check current node
         if isinstance(node, dict):
-            # Look for "CPU Package" (Intel/AMD standard label in LHM)
-            if node.get("Text") == "Package" and "W" in str(node.get("Value", "")):
-                # Clean string "67.7 W" -> 67.7
-                val_str = node.get("Value", "0").split()[0]
-                return float(val_str)
+            # Check if this node matches our target sensor
+            # Criteria: Type matches (Power) AND Name is in our list AND Value has "W"
+            if node.get("Type") == sensor_type: # Only look at Power sensors
+                if any(name.lower() in node.get("Text", "").lower() for name in target_names):
+                    # Clean "67.7 W" -> 67.7
+                    val_str = str(node.get("Value", "0")).split()[0]
+                    try: return float(val_str)
+                    except: return 0.0
             
-            # 2. Check Children
+            # Recursively check children
             if "Children" in node:
                 for child in node["Children"]:
-                    result = self.find_power_value(child)
+                    result = self.find_sensor_value(child, target_names, sensor_type)
                     if result > 0: return result
         
-        # 3. Handle Lists (Root is a list)
+        # Handle lists (Root)
         elif isinstance(node, list):
             for item in node:
-                result = self.find_power_value(item)
+                result = self.find_sensor_value(item, target_names, sensor_type)
                 if result > 0: return result
                 
-        return 0
+        return 0.0
+
+    def find_igpu_power(self, data):
+        """Scans for iGPU/Radeon Graphics power"""
+        # Strategy: Look for the specific sensor "GPU Power" 
+        # But we need to make sure it's NOT the NVIDIA one (if LHM sees it).
+        # Usually, LHM lists the iGPU as "AMD Radeon Graphics" or "Generic VGA".
+        
+        # We search specifically for the "GPU Power" sensor inside the AMD/Generic node
+        # This is tricky because "GPU Power" is generic. 
+        # We rely on the fact that LHM usually groups iGPU separate from NVIDIA.
+        
+        # Search for typical iGPU power labels
+        return self.find_sensor_value(data, ["GPU Power", "Graphics Power", "GFX Power"])
 
     def background_monitor(self):
-        """Main Loop: Reads sensors -> Calculates Cost -> Updates UI"""
         last_log = time.time()
         
         while self.running:
-            # --- 1. GET SENSOR DATA ---
-            
-            # A. GPU Power
-            gpu_w = 0
+            # 1. Discrete GPU (NVIDIA Driver)
+            dgpu_w = 0
             if self.nvml_active:
-                try: 
-                    gpu_w = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
+                try: dgpu_w = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
                 except: pass
 
-            # B. CPU Power (Web API)
-            real_cpu_w = self.get_cpu_power_from_web()
+            # 2. Fetch LHM Data (CPU + iGPU)
+            lhm_data = self.fetch_lhm_data()
             
-            # Logic: Switch between Real Data and Estimation
-            if real_cpu_w > 0:
-                # SUCCESS: We have real data from LHM!
-                # Add 45W for Motherboard + RAM + Fans + Pump overhead
-                system_w = real_cpu_w + 45 
+            cpu_w = 0
+            igpu_w = 0
+            is_estimated = False
+
+            if lhm_data:
+                # Find CPU (Ryzen 9900X)
+                cpu_w = self.find_sensor_value(lhm_data, ["Package", "CPU Package"])
+                
+                # Find iGPU (Radeon)
+                # Note: If iGPU is idle, it might show 0 or be hidden.
+                # We subtract dGPU power if LHM accidentally picked up the NVIDIA card (unlikely via Web)
+                raw_gfx = self.find_sensor_value(lhm_data, ["GPU Power", "GFX Power", "Graphics Power"])
+                
+                # Logic: If the "Graphics" power found is massive (>100W), it's probably the 4070 Ti 
+                # confusing LHM. iGPU should be small (0-50W).
+                if raw_gfx < 80: 
+                    igpu_w = raw_gfx
+                
                 status_msg = "Status: Live Data (LHM Connected)"
-                is_estimated = False
+                
+                # If LHM returns 0 for CPU (bug?), fall back
+                if cpu_w == 0: is_estimated = True
             else:
-                # FAIL: LHM is closed. Use fallback estimate.
-                # Estimate based on GPU usage (if GPU is busy, CPU probably is too)
-                gpu_util = 0
+                # Fallback Estimate
+                is_estimated = True
+                status_msg = "Status: Estimating (LHM Disconnected)"
+                # Basic estimates
+                base_load = 45
+                dgpu_util = 0
                 if self.nvml_active:
-                    try: gpu_util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
+                    try: dgpu_util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
                     except: pass
                 
-                base_draw = 45
-                if gpu_util < 10: cpu_est = 35    # Idle
-                elif gpu_util < 50: cpu_est = 55  # Medium
-                else: cpu_est = 75                # Heavy
-                
-                system_w = cpu_est + base_draw
-                status_msg = "Status: Estimating (Open LHM for Accuracy)"
-                is_estimated = True
+                if dgpu_util < 10: cpu_w = 35
+                elif dgpu_util < 50: cpu_w = 55
+                else: cpu_w = 75
+                igpu_w = 5 # Idle guess
 
-            total_w = gpu_w + system_w
+            # 3. Total Calculation
+            # Add 45W Overhead (Mobo/RAM/Fans/Pump)
+            overhead = 45
+            total_w = dgpu_w + igpu_w + cpu_w + overhead
 
-            # --- 2. CALCULATE COST ---
-            # kWh = (Watts * Seconds) / 3,600,000
+            # 4. Cost Math
             kwh_inc = (total_w * 1.0) / 3_600_000
             self.power_data["total_cost"] += kwh_inc * PRICE_PER_KWH
-            
-            # --- 3. UPDATE GUI ---
+
+            # 5. Update GUI
             try:
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
-                self.lbl_gpu_val.configure(text=f"{int(gpu_w)} W")
-                self.lbl_cpu_val.configure(text=f"{int(system_w)} W")
+                self.lbl_dgpu_val.configure(text=f"{int(dgpu_w)} W")
+                self.lbl_igpu_val.configure(text=f"{int(igpu_w)} W")
+                self.lbl_cpu_val.configure(text=f"{int(cpu_w)} W")
                 self.lbl_cost_val.configure(text=f"{self.power_data['total_cost']:.4f}")
                 self.lbl_status.configure(text=status_msg)
                 
-                # Visual Feedback
-                if is_estimated:
-                     self.lbl_cpu_val.configure(text_color="gray")
-                else:
-                     self.lbl_cpu_val.configure(text_color="#ff8c00") # Orange for CPU
-                     
-                # Dynamic Total Color
-                if total_w > 500: self.lbl_watts.configure(text_color="#FF4444") # Red
-                elif total_w > 300: self.lbl_watts.configure(text_color="#FFD700") # Gold
-                else: self.lbl_watts.configure(text_color="#00E5FF") # Cyan
-
+                # Gray out if estimating
+                color_state = "gray" if is_estimated else "#ff8c00"
+                self.lbl_cpu_val.configure(text_color=color_state)
+                
+                # Total Color
+                if total_w > 500: self.lbl_watts.configure(text_color="#FF4444")
+                elif total_w > 300: self.lbl_watts.configure(text_color="#FFD700")
+                else: self.lbl_watts.configure(text_color="#00E5FF")
             except: pass
 
-            # --- 4. AUTO-SAVE ---
-            # Save every 60 seconds
+            # 6. Save Data
             if time.time() - last_log > 60:
                 self.save_data()
                 last_log = time.time()
-                
             time.sleep(1)
 
     def on_close(self):
