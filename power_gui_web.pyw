@@ -8,9 +8,9 @@ import requests
 from datetime import datetime
 
 # --- CONFIGURATION ---
-PRICE_PER_KWH = 2.14          # Your electricity rate
+PRICE_PER_KWH = 2.14          
 STATE_FILE = "power_state.json"
-LHM_URL = "http://localhost:8085/data.json"  # LibreHardwareMonitor Web Server
+LHM_URL = "http://localhost:8085/data.json"
 
 # --- SYSTEM SETUP ---
 os.environ["PATH"] += os.pathsep + os.getcwd()
@@ -22,7 +22,7 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 1. Window Setup (Made wider for 3 columns)
+        # 1. Window Setup
         self.title("⚡ Power Monitor (Full Spectrum)")
         self.geometry("600x480") 
         self.resizable(False, False)
@@ -36,7 +36,6 @@ class PowerMonitorApp(ctk.CTk):
         self.power_data = self.load_data()
 
         # --- UI LAYOUT ---
-        # Title
         self.lbl_title = ctk.CTkLabel(self, text="Real-Time Consumption", font=("Roboto", 22, "bold"))
         self.lbl_title.pack(pady=(20, 10))
 
@@ -107,7 +106,6 @@ class PowerMonitorApp(ctk.CTk):
         with open(STATE_FILE, 'w') as f: json.dump(self.power_data, f, indent=4)
 
     def fetch_lhm_data(self):
-        """Gets all sensor data from LibreHardwareMonitor Web API"""
         try:
             response = requests.get(LHM_URL, timeout=0.2)
             if response.status_code == 200:
@@ -117,56 +115,84 @@ class PowerMonitorApp(ctk.CTk):
         return None
 
     def find_sensor_value(self, node, target_names, sensor_type="Power"):
-        """Recursive search for a specific sensor (e.g., 'Package' or 'GPU Power')"""
-        # Check current node
+        """Finds a single sensor value (Standard)"""
         if isinstance(node, dict):
-            # Check if this node matches our target sensor
-            # Criteria: Type matches (Power) AND Name is in our list AND Value has "W"
-            if node.get("Type") == sensor_type: # Only look at Power sensors
-                if any(name.lower() in node.get("Text", "").lower() for name in target_names):
-                    # Clean "67.7 W" -> 67.7
+            if node.get("Type") == sensor_type:
+                if any(name.lower() == node.get("Text", "").lower() for name in target_names):
                     val_str = str(node.get("Value", "0")).split()[0]
                     try: return float(val_str)
                     except: return 0.0
             
-            # Recursively check children
             if "Children" in node:
                 for child in node["Children"]:
                     result = self.find_sensor_value(child, target_names, sensor_type)
                     if result > 0: return result
         
-        # Handle lists (Root)
         elif isinstance(node, list):
             for item in node:
                 result = self.find_sensor_value(item, target_names, sensor_type)
                 if result > 0: return result
-                
         return 0.0
 
-    def find_igpu_power(self, data):
-        """Scans for iGPU/Radeon Graphics power"""
-        # Strategy: Look for the specific sensor "GPU Power" 
-        # But we need to make sure it's NOT the NVIDIA one (if LHM sees it).
-        # Usually, LHM lists the iGPU as "AMD Radeon Graphics" or "Generic VGA".
+    def calculate_igpu_total(self, data):
+        """Specifically sums GPU Core + GPU SoC for AMD Radeon"""
+        # We need to traverse the whole tree and sum up any sensor named "GPU Core" or "GPU SoC"
+        # ONLY if they appear under the "AMD Radeon" device.
         
-        # We search specifically for the "GPU Power" sensor inside the AMD/Generic node
-        # This is tricky because "GPU Power" is generic. 
-        # We rely on the fact that LHM usually groups iGPU separate from NVIDIA.
+        total_watts = 0.0
         
-        # Search for typical iGPU power labels
-        return self.find_sensor_value(data, ["GPU Power", "Graphics Power", "GFX Power"])
+        # Helper to recursively scan for the Radeon device first
+        def scan_for_radeon(node):
+            nonlocal total_watts
+            if isinstance(node, dict):
+                # 1. Is this the Radeon Device?
+                if "Radeon" in node.get("Text", "") or "Generic VGA" in node.get("Text", ""):
+                    # 2. Scan its children for Power sensors
+                    total_watts = self.sum_radeon_powers(node)
+                    return True # Stop searching once found
+                
+                # Recursion
+                if "Children" in node:
+                    for child in node["Children"]:
+                        if scan_for_radeon(child): return True
+
+            elif isinstance(node, list):
+                for item in node:
+                    if scan_for_radeon(item): return True
+            return False
+
+        scan_for_radeon(data)
+        return total_watts
+
+    def sum_radeon_powers(self, node):
+        """Sums Core + SoC watts inside the Radeon node"""
+        acc = 0.0
+        if "Children" in node:
+            for child in node["Children"]:
+                # Check if it's a Power sensor
+                if child.get("Type") == "Power":
+                    name = child.get("Text", "")
+                    # SUM logic: Add Core and SoC
+                    if name in ["GPU Core", "GPU SoC", "GPU Power"]:
+                        val_str = str(child.get("Value", "0")).split()[0]
+                        try: acc += float(val_str)
+                        except: pass
+                
+                # Recurse deeper (in case sensors are grouped)
+                acc += self.sum_radeon_powers(child)
+        return acc
 
     def background_monitor(self):
         last_log = time.time()
         
         while self.running:
-            # 1. Discrete GPU (NVIDIA Driver)
+            # 1. Discrete GPU (NVIDIA)
             dgpu_w = 0
             if self.nvml_active:
                 try: dgpu_w = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
                 except: pass
 
-            # 2. Fetch LHM Data (CPU + iGPU)
+            # 2. Fetch LHM Data
             lhm_data = self.fetch_lhm_data()
             
             cpu_w = 0
@@ -174,28 +200,18 @@ class PowerMonitorApp(ctk.CTk):
             is_estimated = False
 
             if lhm_data:
-                # Find CPU (Ryzen 9900X)
+                # Find CPU (Ryzen) - Look for "Package"
                 cpu_w = self.find_sensor_value(lhm_data, ["Package", "CPU Package"])
                 
-                # Find iGPU (Radeon)
-                # Note: If iGPU is idle, it might show 0 or be hidden.
-                # We subtract dGPU power if LHM accidentally picked up the NVIDIA card (unlikely via Web)
-                raw_gfx = self.find_sensor_value(lhm_data, ["GPU Power", "GFX Power", "Graphics Power"])
-                
-                # Logic: If the "Graphics" power found is massive (>100W), it's probably the 4070 Ti 
-                # confusing LHM. iGPU should be small (0-50W).
-                if raw_gfx < 80: 
-                    igpu_w = raw_gfx
+                # Find iGPU (Radeon) - NEW SUMMING LOGIC
+                igpu_w = self.calculate_igpu_total(lhm_data)
                 
                 status_msg = "Status: Live Data (LHM Connected)"
-                
-                # If LHM returns 0 for CPU (bug?), fall back
                 if cpu_w == 0: is_estimated = True
             else:
-                # Fallback Estimate
                 is_estimated = True
                 status_msg = "Status: Estimating (LHM Disconnected)"
-                # Basic estimates
+                # Fallback Estimates
                 base_load = 45
                 dgpu_util = 0
                 if self.nvml_active:
@@ -205,14 +221,13 @@ class PowerMonitorApp(ctk.CTk):
                 if dgpu_util < 10: cpu_w = 35
                 elif dgpu_util < 50: cpu_w = 55
                 else: cpu_w = 75
-                igpu_w = 5 # Idle guess
+                igpu_w = 5 
 
             # 3. Total Calculation
-            # Add 45W Overhead (Mobo/RAM/Fans/Pump)
             overhead = 45
             total_w = dgpu_w + igpu_w + cpu_w + overhead
 
-            # 4. Cost Math
+            # 4. Update Data
             kwh_inc = (total_w * 1.0) / 3_600_000
             self.power_data["total_cost"] += kwh_inc * PRICE_PER_KWH
 
@@ -225,17 +240,14 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_cost_val.configure(text=f"{self.power_data['total_cost']:.4f}")
                 self.lbl_status.configure(text=status_msg)
                 
-                # Gray out if estimating
                 color_state = "gray" if is_estimated else "#ff8c00"
                 self.lbl_cpu_val.configure(text_color=color_state)
                 
-                # Total Color
                 if total_w > 500: self.lbl_watts.configure(text_color="#FF4444")
                 elif total_w > 300: self.lbl_watts.configure(text_color="#FFD700")
                 else: self.lbl_watts.configure(text_color="#00E5FF")
             except: pass
 
-            # 6. Save Data
             if time.time() - last_log > 60:
                 self.save_data()
                 last_log = time.time()
