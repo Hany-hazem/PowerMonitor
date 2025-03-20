@@ -22,9 +22,9 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 1. Window Setup
-        self.title("⚡ Power Monitor (Full Spectrum)")
-        self.geometry("600x480") 
+        # 1. Window Setup (Taller for more stats)
+        self.title("⚡ Power Monitor (Session & Day)")
+        self.geometry("600x580") 
         self.resizable(False, False)
 
         # 2. Hardware Init
@@ -32,57 +32,76 @@ class PowerMonitorApp(ctk.CTk):
         self.nvml_active = False
         self.setup_nvml()
         
+        # 3. Data Init
         self.running = True
-        self.power_data = self.load_data()
+        # Session stats (RAM only, resets on launch)
+        self.session_data = {"kwh": 0.0, "cost": 0.0}
+        # Persistent stats (Disk, resets daily or never)
+        self.persistent_data = self.load_data()
 
         # --- UI LAYOUT ---
+        # Title
         self.lbl_title = ctk.CTkLabel(self, text="Real-Time Consumption", font=("Roboto", 22, "bold"))
-        self.lbl_title.pack(pady=(20, 10))
+        self.lbl_title.pack(pady=(20, 5))
 
-        # Big Total Watts
-        self.lbl_watts = ctk.CTkLabel(self, text="--- W", font=("Roboto", 54, "bold"), text_color="#00E5FF")
+        # Big Watts
+        self.lbl_watts = ctk.CTkLabel(self, text="--- W", font=("Roboto", 60, "bold"), text_color="#00E5FF")
         self.lbl_watts.pack(pady=5)
         
-        self.lbl_total_sub = ctk.CTkLabel(self, text="Total System Power", font=("Arial", 12), text_color="gray")
-        self.lbl_total_sub.pack(pady=(0, 20))
+        # Hardware Split (3 Columns)
+        self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_hw.pack(pady=10, padx=10, fill="x")
 
-        # --- 3-COLUMN SPLIT VIEW ---
-        self.frame_details = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_details.pack(pady=5, padx=10, fill="x")
-
-        # Col 1: Discrete GPU (NVIDIA)
-        self.frame_dgpu = ctk.CTkFrame(self.frame_details)
-        self.frame_dgpu.pack(side="left", expand=True, fill="both", padx=5)
-        ctk.CTkLabel(self.frame_dgpu, text="RTX 4070 Ti", font=("Arial", 11, "bold"), text_color="#76b900").pack(pady=(10,0))
-        self.lbl_dgpu_val = ctk.CTkLabel(self.frame_dgpu, text="0 W", font=("Roboto", 22, "bold"))
+        # NVIDIA
+        self.frame_dgpu = ctk.CTkFrame(self.frame_hw, width=150)
+        self.frame_dgpu.pack(side="left", expand=True, padx=5)
+        ctk.CTkLabel(self.frame_dgpu, text="RTX 4070 Ti", font=("Arial", 11, "bold"), text_color="#76b900").pack(pady=5)
+        self.lbl_dgpu_val = ctk.CTkLabel(self.frame_dgpu, text="0 W", font=("Roboto", 20, "bold"))
         self.lbl_dgpu_val.pack(pady=(0, 10))
 
-        # Col 2: Integrated GPU (AMD iGPU)
-        self.frame_igpu = ctk.CTkFrame(self.frame_details)
-        self.frame_igpu.pack(side="left", expand=True, fill="both", padx=5)
-        ctk.CTkLabel(self.frame_igpu, text="iGPU (Radeon)", font=("Arial", 11, "bold"), text_color="#FF3333").pack(pady=(10,0))
-        self.lbl_igpu_val = ctk.CTkLabel(self.frame_igpu, text="0 W", font=("Roboto", 22, "bold"))
+        # Radeon
+        self.frame_igpu = ctk.CTkFrame(self.frame_hw, width=150)
+        self.frame_igpu.pack(side="left", expand=True, padx=5)
+        ctk.CTkLabel(self.frame_igpu, text="iGPU (Radeon)", font=("Arial", 11, "bold"), text_color="#FF3333").pack(pady=5)
+        self.lbl_igpu_val = ctk.CTkLabel(self.frame_igpu, text="0 W", font=("Roboto", 20, "bold"))
         self.lbl_igpu_val.pack(pady=(0, 10))
 
-        # Col 3: CPU (Ryzen)
-        self.frame_cpu = ctk.CTkFrame(self.frame_details)
-        self.frame_cpu.pack(side="right", expand=True, fill="both", padx=5)
-        ctk.CTkLabel(self.frame_cpu, text="Ryzen 9900X", font=("Arial", 11, "bold"), text_color="#ff8c00").pack(pady=(10,0))
-        self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 22, "bold"))
+        # Ryzen
+        self.frame_cpu = ctk.CTkFrame(self.frame_hw, width=150)
+        self.frame_cpu.pack(side="right", expand=True, padx=5)
+        ctk.CTkLabel(self.frame_cpu, text="Ryzen 9900X", font=("Arial", 11, "bold"), text_color="#ff8c00").pack(pady=5)
+        self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 20, "bold"))
         self.lbl_cpu_val.pack(pady=(0, 10))
 
-        # Cost Section
-        self.frame_info = ctk.CTkFrame(self)
-        self.frame_info.pack(pady=25, padx=25, fill="x")
-        
-        self.lbl_cost_title = ctk.CTkLabel(self.frame_info, text="Total Cost (EGP):", font=("Arial", 14))
-        self.lbl_cost_title.pack(pady=(10, 0))
-        self.lbl_cost_val = ctk.CTkLabel(self.frame_info, text=f"{self.power_data['total_cost']:.4f}", font=("Arial", 30, "bold"), text_color="#00FF00")
-        self.lbl_cost_val.pack(pady=(0, 10))
+        # --- STATS GRID (Session vs Day) ---
+        self.frame_stats = ctk.CTkFrame(self)
+        self.frame_stats.pack(pady=20, padx=20, fill="x")
+
+        # Header Row
+        self.lbl_h1 = ctk.CTkLabel(self.frame_stats, text="TIMELINE", font=("Arial", 12, "bold"), text_color="gray")
+        self.lbl_h1.grid(row=0, column=0, padx=20, pady=10, sticky="w")
+        self.lbl_h2 = ctk.CTkLabel(self.frame_stats, text="COST (EGP)", font=("Arial", 12, "bold"), text_color="gray")
+        self.lbl_h2.grid(row=0, column=1, padx=20, pady=10, sticky="e")
+        self.lbl_h3 = ctk.CTkLabel(self.frame_stats, text="ENERGY", font=("Arial", 12, "bold"), text_color="gray")
+        self.lbl_h3.grid(row=0, column=2, padx=20, pady=10, sticky="e")
+
+        # Row 1: Session
+        ctk.CTkLabel(self.frame_stats, text="This Session:", font=("Arial", 14)).grid(row=1, column=0, padx=20, pady=5, sticky="w")
+        self.lbl_sess_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00E5FF")
+        self.lbl_sess_cost.grid(row=1, column=1, padx=20, pady=5, sticky="e")
+        self.lbl_sess_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
+        self.lbl_sess_kwh.grid(row=1, column=2, padx=20, pady=5, sticky="e")
+
+        # Row 2: Today
+        ctk.CTkLabel(self.frame_stats, text="Today (Total):", font=("Arial", 14)).grid(row=2, column=0, padx=20, pady=5, sticky="w")
+        self.lbl_day_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00FF00")
+        self.lbl_day_cost.grid(row=2, column=1, padx=20, pady=5, sticky="e")
+        self.lbl_day_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
+        self.lbl_day_kwh.grid(row=2, column=2, padx=20, pady=5, sticky="e")
 
         # Status Bar
         self.lbl_status = ctk.CTkLabel(self, text="Initializing...", text_color="gray", font=("Arial", 11))
-        self.lbl_status.pack(side="bottom", pady=8)
+        self.lbl_status.pack(side="bottom", pady=10)
 
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
         self.monitor_thread.start()
@@ -96,89 +115,86 @@ class PowerMonitorApp(ctk.CTk):
         except: self.nvml_active = False
 
     def load_data(self):
+        """Loads data and handles Daily Reset logic"""
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        default_data = {
+            "last_date": today_str,
+            "day_kwh": 0.0,
+            "day_cost": 0.0,
+            "lifetime_kwh": 0.0, # Optional: if you want lifetime stats later
+            "lifetime_cost": 0.0
+        }
+
         if os.path.exists(STATE_FILE):
             try:
-                with open(STATE_FILE, 'r') as f: return json.load(f)
+                with open(STATE_FILE, 'r') as f:
+                    data = json.load(f)
+                    
+                    # check for reset
+                    if data.get("last_date") != today_str:
+                        print("📅 New day detected! Resetting Daily stats.")
+                        data["last_date"] = today_str
+                        data["day_kwh"] = 0.0
+                        data["day_cost"] = 0.0
+                    return data
             except: pass
-        return {"total_kwh": 0.0, "total_cost": 0.0}
+        
+        return default_data
 
     def save_data(self):
-        with open(STATE_FILE, 'w') as f: json.dump(self.power_data, f, indent=4)
+        with open(STATE_FILE, 'w') as f: json.dump(self.persistent_data, f, indent=4)
 
     def fetch_lhm_data(self):
         try:
             response = requests.get(LHM_URL, timeout=0.2)
-            if response.status_code == 200:
-                return response.json()
-        except:
-            return None
+            if response.status_code == 200: return response.json()
+        except: return None
         return None
 
     def find_sensor_value(self, node, target_names, sensor_type="Power"):
-        """Finds a single sensor value (Standard)"""
         if isinstance(node, dict):
             if node.get("Type") == sensor_type:
                 if any(name.lower() == node.get("Text", "").lower() for name in target_names):
                     val_str = str(node.get("Value", "0")).split()[0]
                     try: return float(val_str)
                     except: return 0.0
-            
             if "Children" in node:
                 for child in node["Children"]:
-                    result = self.find_sensor_value(child, target_names, sensor_type)
-                    if result > 0: return result
-        
+                    res = self.find_sensor_value(child, target_names, sensor_type)
+                    if res > 0: return res
         elif isinstance(node, list):
             for item in node:
-                result = self.find_sensor_value(item, target_names, sensor_type)
-                if result > 0: return result
+                res = self.find_sensor_value(item, target_names, sensor_type)
+                if res > 0: return res
         return 0.0
 
     def calculate_igpu_total(self, data):
-        """Specifically sums GPU Core + GPU SoC for AMD Radeon"""
-        # We need to traverse the whole tree and sum up any sensor named "GPU Core" or "GPU SoC"
-        # ONLY if they appear under the "AMD Radeon" device.
-        
-        total_watts = 0.0
-        
-        # Helper to recursively scan for the Radeon device first
-        def scan_for_radeon(node):
-            nonlocal total_watts
+        total = 0.0
+        def scan(node):
+            nonlocal total
             if isinstance(node, dict):
-                # 1. Is this the Radeon Device?
                 if "Radeon" in node.get("Text", "") or "Generic VGA" in node.get("Text", ""):
-                    # 2. Scan its children for Power sensors
-                    total_watts = self.sum_radeon_powers(node)
-                    return True # Stop searching once found
-                
-                # Recursion
+                    total = self.sum_radeon_powers(node)
+                    return True
                 if "Children" in node:
                     for child in node["Children"]:
-                        if scan_for_radeon(child): return True
-
+                        if scan(child): return True
             elif isinstance(node, list):
                 for item in node:
-                    if scan_for_radeon(item): return True
+                    if scan(item): return True
             return False
-
-        scan_for_radeon(data)
-        return total_watts
+        scan(data)
+        return total
 
     def sum_radeon_powers(self, node):
-        """Sums Core + SoC watts inside the Radeon node"""
         acc = 0.0
         if "Children" in node:
             for child in node["Children"]:
-                # Check if it's a Power sensor
                 if child.get("Type") == "Power":
                     name = child.get("Text", "")
-                    # SUM logic: Add Core and SoC
                     if name in ["GPU Core", "GPU SoC", "GPU Power"]:
-                        val_str = str(child.get("Value", "0")).split()[0]
-                        try: acc += float(val_str)
+                        try: acc += float(str(child.get("Value", "0")).split()[0])
                         except: pass
-                
-                # Recurse deeper (in case sensors are grouped)
                 acc += self.sum_radeon_powers(child)
         return acc
 
@@ -186,68 +202,87 @@ class PowerMonitorApp(ctk.CTk):
         last_log = time.time()
         
         while self.running:
-            # 1. Discrete GPU (NVIDIA)
+            # 1. READ HARDWARE
             dgpu_w = 0
             if self.nvml_active:
                 try: dgpu_w = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
                 except: pass
 
-            # 2. Fetch LHM Data
             lhm_data = self.fetch_lhm_data()
-            
-            cpu_w = 0
-            igpu_w = 0
+            cpu_w, igpu_w = 0, 0
             is_estimated = False
+            status_msg = "Live Data"
 
             if lhm_data:
-                # Find CPU (Ryzen) - Look for "Package"
                 cpu_w = self.find_sensor_value(lhm_data, ["Package", "CPU Package"])
-                
-                # Find iGPU (Radeon) - NEW SUMMING LOGIC
                 igpu_w = self.calculate_igpu_total(lhm_data)
-                
-                status_msg = "Status: Live Data (LHM Connected)"
                 if cpu_w == 0: is_estimated = True
             else:
                 is_estimated = True
-                status_msg = "Status: Estimating (LHM Disconnected)"
-                # Fallback Estimates
+                status_msg = "Estimating (LHM Off)"
+                # Fallback logic
                 base_load = 45
-                dgpu_util = 0
+                gpu_util = 0
                 if self.nvml_active:
-                    try: dgpu_util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
+                    try: gpu_util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
                     except: pass
-                
-                if dgpu_util < 10: cpu_w = 35
-                elif dgpu_util < 50: cpu_w = 55
+                if gpu_util < 10: cpu_w = 35
+                elif gpu_util < 50: cpu_w = 55
                 else: cpu_w = 75
-                igpu_w = 5 
 
-            # 3. Total Calculation
+            # 2. TOTALS
             overhead = 45
             total_w = dgpu_w + igpu_w + cpu_w + overhead
 
-            # 4. Update Data
+            # 3. CALCULATE INCREMENTS
+            # kWh = Watts * Seconds / 3.6M
             kwh_inc = (total_w * 1.0) / 3_600_000
-            self.power_data["total_cost"] += kwh_inc * PRICE_PER_KWH
+            cost_inc = kwh_inc * PRICE_PER_KWH
 
-            # 5. Update GUI
+            # Update Session (Memory)
+            self.session_data["kwh"] += kwh_inc
+            self.session_data["cost"] += cost_inc
+
+            # Update Persistent (Today)
+            self.persistent_data["day_kwh"] += kwh_inc
+            self.persistent_data["day_cost"] += cost_inc
+            self.persistent_data["lifetime_kwh"] += kwh_inc
+            self.persistent_data["lifetime_cost"] += cost_inc
+
+            # Check for Day Change (Midnight rollover while running)
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            if current_date != self.persistent_data["last_date"]:
+                self.persistent_data["last_date"] = current_date
+                self.persistent_data["day_kwh"] = 0.0
+                self.persistent_data["day_cost"] = 0.0
+
+            # 4. GUI UPDATE
             try:
+                # Top section
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
                 self.lbl_dgpu_val.configure(text=f"{int(dgpu_w)} W")
                 self.lbl_igpu_val.configure(text=f"{int(igpu_w)} W")
                 self.lbl_cpu_val.configure(text=f"{int(cpu_w)} W")
-                self.lbl_cost_val.configure(text=f"{self.power_data['total_cost']:.4f}")
                 self.lbl_status.configure(text=status_msg)
+
+                # Stats Grid
+                # Session
+                self.lbl_sess_cost.configure(text=f"{self.session_data['cost']:.4f}")
+                self.lbl_sess_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
                 
+                # Daily
+                self.lbl_day_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
+                self.lbl_day_kwh.configure(text=f"{self.persistent_data['day_kwh']:.4f} kWh")
+
+                # Colors
                 color_state = "gray" if is_estimated else "#ff8c00"
                 self.lbl_cpu_val.configure(text_color=color_state)
-                
                 if total_w > 500: self.lbl_watts.configure(text_color="#FF4444")
                 elif total_w > 300: self.lbl_watts.configure(text_color="#FFD700")
                 else: self.lbl_watts.configure(text_color="#00E5FF")
             except: pass
 
+            # 5. SAVE
             if time.time() - last_log > 60:
                 self.save_data()
                 last_log = time.time()
