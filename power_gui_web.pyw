@@ -22,8 +22,8 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 1. Window Setup (Taller for more stats)
-        self.title("⚡ Power Monitor (Session & Day)")
+        # 1. Window Setup
+        self.title("⚡ Power Monitor (Auto-Fix)")
         self.geometry("600x580") 
         self.resizable(False, False)
 
@@ -32,12 +32,11 @@ class PowerMonitorApp(ctk.CTk):
         self.nvml_active = False
         self.setup_nvml()
         
-        # 3. Data Init
+        # 3. Data Init (Now Crash-Proof)
         self.running = True
-        # Session stats (RAM only, resets on launch)
         self.session_data = {"kwh": 0.0, "cost": 0.0}
-        # Persistent stats (Disk, resets daily or never)
-        self.persistent_data = self.load_data()
+        self.persistent_data = self.load_data() # <--- This fixed function runs now
+        self.save_data() # Save immediately to fix the file on disk
 
         # --- UI LAYOUT ---
         # Title
@@ -48,7 +47,7 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_watts = ctk.CTkLabel(self, text="--- W", font=("Roboto", 60, "bold"), text_color="#00E5FF")
         self.lbl_watts.pack(pady=5)
         
-        # Hardware Split (3 Columns)
+        # Hardware Split
         self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_hw.pack(pady=10, padx=10, fill="x")
 
@@ -73,11 +72,10 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 20, "bold"))
         self.lbl_cpu_val.pack(pady=(0, 10))
 
-        # --- STATS GRID (Session vs Day) ---
+        # --- STATS GRID ---
         self.frame_stats = ctk.CTkFrame(self)
         self.frame_stats.pack(pady=20, padx=20, fill="x")
 
-        # Header Row
         self.lbl_h1 = ctk.CTkLabel(self.frame_stats, text="TIMELINE", font=("Arial", 12, "bold"), text_color="gray")
         self.lbl_h1.grid(row=0, column=0, padx=20, pady=10, sticky="w")
         self.lbl_h2 = ctk.CTkLabel(self.frame_stats, text="COST (EGP)", font=("Arial", 12, "bold"), text_color="gray")
@@ -85,21 +83,20 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_h3 = ctk.CTkLabel(self.frame_stats, text="ENERGY", font=("Arial", 12, "bold"), text_color="gray")
         self.lbl_h3.grid(row=0, column=2, padx=20, pady=10, sticky="e")
 
-        # Row 1: Session
+        # Session Row
         ctk.CTkLabel(self.frame_stats, text="This Session:", font=("Arial", 14)).grid(row=1, column=0, padx=20, pady=5, sticky="w")
         self.lbl_sess_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00E5FF")
         self.lbl_sess_cost.grid(row=1, column=1, padx=20, pady=5, sticky="e")
         self.lbl_sess_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
         self.lbl_sess_kwh.grid(row=1, column=2, padx=20, pady=5, sticky="e")
 
-        # Row 2: Today
+        # Daily Row
         ctk.CTkLabel(self.frame_stats, text="Today (Total):", font=("Arial", 14)).grid(row=2, column=0, padx=20, pady=5, sticky="w")
         self.lbl_day_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00FF00")
         self.lbl_day_cost.grid(row=2, column=1, padx=20, pady=5, sticky="e")
         self.lbl_day_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
         self.lbl_day_kwh.grid(row=2, column=2, padx=20, pady=5, sticky="e")
 
-        # Status Bar
         self.lbl_status = ctk.CTkLabel(self, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack(side="bottom", pady=10)
 
@@ -115,14 +112,14 @@ class PowerMonitorApp(ctk.CTk):
         except: self.nvml_active = False
 
     def load_data(self):
-        """Loads data and handles Daily Reset logic"""
+        """Auto-Fixes old save files so it never crashes"""
         today_str = datetime.now().strftime("%Y-%m-%d")
+        
+        # Default fresh structure
         default_data = {
             "last_date": today_str,
-            "day_kwh": 0.0,
-            "day_cost": 0.0,
-            "lifetime_kwh": 0.0, # Optional: if you want lifetime stats later
-            "lifetime_cost": 0.0
+            "day_kwh": 0.0, "day_cost": 0.0,
+            "lifetime_kwh": 0.0, "lifetime_cost": 0.0
         }
 
         if os.path.exists(STATE_FILE):
@@ -130,14 +127,29 @@ class PowerMonitorApp(ctk.CTk):
                 with open(STATE_FILE, 'r') as f:
                     data = json.load(f)
                     
-                    # check for reset
+                    # --- AUTO-REPAIR LOGIC ---
+                    # If the file is old (missing keys), we add them now.
+                    if "lifetime_kwh" not in data:
+                        print("🔧 Repairing old save file...")
+                        # Try to preserve old 'total' if it exists, otherwise 0
+                        old_kwh = data.get("total_kwh", 0.0)
+                        old_cost = data.get("total_cost", 0.0)
+                        
+                        data["lifetime_kwh"] = old_kwh
+                        data["lifetime_cost"] = old_cost
+                        data["day_kwh"] = 0.0
+                        data["day_cost"] = 0.0
+                        data["last_date"] = today_str
+                    
+                    # --- DAILY RESET LOGIC ---
                     if data.get("last_date") != today_str:
-                        print("📅 New day detected! Resetting Daily stats.")
                         data["last_date"] = today_str
                         data["day_kwh"] = 0.0
                         data["day_cost"] = 0.0
+                        
                     return data
-            except: pass
+            except: 
+                print("⚠️ Save file corrupted. Starting fresh.")
         
         return default_data
 
@@ -220,7 +232,6 @@ class PowerMonitorApp(ctk.CTk):
             else:
                 is_estimated = True
                 status_msg = "Estimating (LHM Off)"
-                # Fallback logic
                 base_load = 45
                 gpu_util = 0
                 if self.nvml_active:
@@ -235,21 +246,20 @@ class PowerMonitorApp(ctk.CTk):
             total_w = dgpu_w + igpu_w + cpu_w + overhead
 
             # 3. CALCULATE INCREMENTS
-            # kWh = Watts * Seconds / 3.6M
             kwh_inc = (total_w * 1.0) / 3_600_000
             cost_inc = kwh_inc * PRICE_PER_KWH
 
-            # Update Session (Memory)
+            # Update Session
             self.session_data["kwh"] += kwh_inc
             self.session_data["cost"] += cost_inc
 
-            # Update Persistent (Today)
+            # Update Persistent (Safely)
             self.persistent_data["day_kwh"] += kwh_inc
             self.persistent_data["day_cost"] += cost_inc
             self.persistent_data["lifetime_kwh"] += kwh_inc
             self.persistent_data["lifetime_cost"] += cost_inc
 
-            # Check for Day Change (Midnight rollover while running)
+            # Daily Rollover Check
             current_date = datetime.now().strftime("%Y-%m-%d")
             if current_date != self.persistent_data["last_date"]:
                 self.persistent_data["last_date"] = current_date
@@ -258,23 +268,18 @@ class PowerMonitorApp(ctk.CTk):
 
             # 4. GUI UPDATE
             try:
-                # Top section
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
                 self.lbl_dgpu_val.configure(text=f"{int(dgpu_w)} W")
                 self.lbl_igpu_val.configure(text=f"{int(igpu_w)} W")
                 self.lbl_cpu_val.configure(text=f"{int(cpu_w)} W")
                 self.lbl_status.configure(text=status_msg)
 
-                # Stats Grid
-                # Session
+                # Stats
                 self.lbl_sess_cost.configure(text=f"{self.session_data['cost']:.4f}")
                 self.lbl_sess_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
-                
-                # Daily
                 self.lbl_day_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
                 self.lbl_day_kwh.configure(text=f"{self.persistent_data['day_kwh']:.4f} kWh")
 
-                # Colors
                 color_state = "gray" if is_estimated else "#ff8c00"
                 self.lbl_cpu_val.configure(text_color=color_state)
                 if total_w > 500: self.lbl_watts.configure(text_color="#FF4444")
