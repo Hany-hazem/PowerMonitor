@@ -22,9 +22,9 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 1. Window Setup
-        self.title("⚡ Power Monitor (Auto-Fix)")
-        self.geometry("600x580") 
+        # 1. Window Setup (Made taller for 3rd row)
+        self.title("⚡ Power Monitor (Daily & Overall)")
+        self.geometry("600x620") 
         self.resizable(False, False)
 
         # 2. Hardware Init
@@ -32,11 +32,11 @@ class PowerMonitorApp(ctk.CTk):
         self.nvml_active = False
         self.setup_nvml()
         
-        # 3. Data Init (Now Crash-Proof)
+        # 3. Data Init
         self.running = True
         self.session_data = {"kwh": 0.0, "cost": 0.0}
-        self.persistent_data = self.load_data() # <--- This fixed function runs now
-        self.save_data() # Save immediately to fix the file on disk
+        self.persistent_data = self.load_data()
+        self.save_data() # Ensure file structure is up to date
 
         # --- UI LAYOUT ---
         # Title
@@ -72,10 +72,11 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 20, "bold"))
         self.lbl_cpu_val.pack(pady=(0, 10))
 
-        # --- STATS GRID ---
+        # --- STATS GRID (3 Rows now) ---
         self.frame_stats = ctk.CTkFrame(self)
         self.frame_stats.pack(pady=20, padx=20, fill="x")
 
+        # Headers
         self.lbl_h1 = ctk.CTkLabel(self.frame_stats, text="TIMELINE", font=("Arial", 12, "bold"), text_color="gray")
         self.lbl_h1.grid(row=0, column=0, padx=20, pady=10, sticky="w")
         self.lbl_h2 = ctk.CTkLabel(self.frame_stats, text="COST (EGP)", font=("Arial", 12, "bold"), text_color="gray")
@@ -83,20 +84,28 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_h3 = ctk.CTkLabel(self.frame_stats, text="ENERGY", font=("Arial", 12, "bold"), text_color="gray")
         self.lbl_h3.grid(row=0, column=2, padx=20, pady=10, sticky="e")
 
-        # Session Row
+        # Row 1: Session
         ctk.CTkLabel(self.frame_stats, text="This Session:", font=("Arial", 14)).grid(row=1, column=0, padx=20, pady=5, sticky="w")
         self.lbl_sess_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00E5FF")
         self.lbl_sess_cost.grid(row=1, column=1, padx=20, pady=5, sticky="e")
         self.lbl_sess_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
         self.lbl_sess_kwh.grid(row=1, column=2, padx=20, pady=5, sticky="e")
 
-        # Daily Row
-        ctk.CTkLabel(self.frame_stats, text="Today (Total):", font=("Arial", 14)).grid(row=2, column=0, padx=20, pady=5, sticky="w")
+        # Row 2: Today (Daily)
+        ctk.CTkLabel(self.frame_stats, text="Today (Daily):", font=("Arial", 14)).grid(row=2, column=0, padx=20, pady=5, sticky="w")
         self.lbl_day_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00FF00")
         self.lbl_day_cost.grid(row=2, column=1, padx=20, pady=5, sticky="e")
         self.lbl_day_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
         self.lbl_day_kwh.grid(row=2, column=2, padx=20, pady=5, sticky="e")
 
+        # Row 3: Lifetime (Overall)
+        ctk.CTkLabel(self.frame_stats, text="Overall (Lifetime):", font=("Arial", 14)).grid(row=3, column=0, padx=20, pady=5, sticky="w")
+        self.lbl_life_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#FFA500") # Orange
+        self.lbl_life_cost.grid(row=3, column=1, padx=20, pady=5, sticky="e")
+        self.lbl_life_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
+        self.lbl_life_kwh.grid(row=3, column=2, padx=20, pady=5, sticky="e")
+
+        # Status Bar
         self.lbl_status = ctk.CTkLabel(self, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack(side="bottom", pady=10)
 
@@ -115,7 +124,6 @@ class PowerMonitorApp(ctk.CTk):
         """Auto-Fixes old save files so it never crashes"""
         today_str = datetime.now().strftime("%Y-%m-%d")
         
-        # Default fresh structure
         default_data = {
             "last_date": today_str,
             "day_kwh": 0.0, "day_cost": 0.0,
@@ -127,21 +135,17 @@ class PowerMonitorApp(ctk.CTk):
                 with open(STATE_FILE, 'r') as f:
                     data = json.load(f)
                     
-                    # --- AUTO-REPAIR LOGIC ---
-                    # If the file is old (missing keys), we add them now.
+                    # Auto-Repair: Add missing lifetime keys if old file
                     if "lifetime_kwh" not in data:
-                        print("🔧 Repairing old save file...")
-                        # Try to preserve old 'total' if it exists, otherwise 0
                         old_kwh = data.get("total_kwh", 0.0)
                         old_cost = data.get("total_cost", 0.0)
-                        
                         data["lifetime_kwh"] = old_kwh
                         data["lifetime_cost"] = old_cost
                         data["day_kwh"] = 0.0
                         data["day_cost"] = 0.0
                         data["last_date"] = today_str
                     
-                    # --- DAILY RESET LOGIC ---
+                    # Daily Reset Check
                     if data.get("last_date") != today_str:
                         data["last_date"] = today_str
                         data["day_kwh"] = 0.0
@@ -149,7 +153,7 @@ class PowerMonitorApp(ctk.CTk):
                         
                     return data
             except: 
-                print("⚠️ Save file corrupted. Starting fresh.")
+                pass
         
         return default_data
 
@@ -274,11 +278,17 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_cpu_val.configure(text=f"{int(cpu_w)} W")
                 self.lbl_status.configure(text=status_msg)
 
-                # Stats
+                # Stats Row 1: Session
                 self.lbl_sess_cost.configure(text=f"{self.session_data['cost']:.4f}")
                 self.lbl_sess_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
+                
+                # Stats Row 2: Daily
                 self.lbl_day_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
                 self.lbl_day_kwh.configure(text=f"{self.persistent_data['day_kwh']:.4f} kWh")
+
+                # Stats Row 3: Lifetime (NEW)
+                self.lbl_life_cost.configure(text=f"{self.persistent_data['lifetime_cost']:.4f}")
+                self.lbl_life_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
 
                 color_state = "gray" if is_estimated else "#ff8c00"
                 self.lbl_cpu_val.configure(text_color=color_state)
