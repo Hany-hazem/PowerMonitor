@@ -22,9 +22,9 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 1. Window Setup
-        self.title("⚡ Power Monitor (Full Time Tracking)")
-        self.geometry("640x620") # Slightly wider for time strings
+        # 1. Window Setup (Wider for 4 columns)
+        self.title("⚡ Power Monitor (Clean Grid)")
+        self.geometry("700x620") 
         self.resizable(False, False)
 
         # 2. Hardware Init
@@ -73,41 +73,58 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 20, "bold"))
         self.lbl_cpu_val.pack(pady=(0, 10))
 
-        # --- STATS GRID ---
+        # --- STATS GRID (4 Columns Now) ---
         self.frame_stats = ctk.CTkFrame(self)
         self.frame_stats.pack(pady=20, padx=20, fill="x")
 
         # Headers
         self.lbl_h1 = ctk.CTkLabel(self.frame_stats, text="TIMELINE", font=("Arial", 12, "bold"), text_color="gray")
         self.lbl_h1.grid(row=0, column=0, padx=20, pady=10, sticky="w")
+        
         self.lbl_h2 = ctk.CTkLabel(self.frame_stats, text="COST (EGP)", font=("Arial", 12, "bold"), text_color="gray")
-        self.lbl_h2.grid(row=0, column=1, padx=20, pady=10, sticky="e")
+        self.lbl_h2.grid(row=0, column=1, padx=15, pady=10, sticky="e")
+        
         self.lbl_h3 = ctk.CTkLabel(self.frame_stats, text="ENERGY", font=("Arial", 12, "bold"), text_color="gray")
-        self.lbl_h3.grid(row=0, column=2, padx=20, pady=10, sticky="e")
+        self.lbl_h3.grid(row=0, column=2, padx=15, pady=10, sticky="e")
+        
+        self.lbl_h4 = ctk.CTkLabel(self.frame_stats, text="DURATION", font=("Arial", 12, "bold"), text_color="gray")
+        self.lbl_h4.grid(row=0, column=3, padx=20, pady=10, sticky="e")
 
         # Row 1: Session
-        self.lbl_sess_title = ctk.CTkLabel(self.frame_stats, text="Session (00:00:00):", font=("Arial", 14))
-        self.lbl_sess_title.grid(row=1, column=0, padx=20, pady=5, sticky="w")
+        ctk.CTkLabel(self.frame_stats, text="Session:", font=("Arial", 14)).grid(row=1, column=0, padx=20, pady=5, sticky="w")
+        
         self.lbl_sess_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00E5FF")
-        self.lbl_sess_cost.grid(row=1, column=1, padx=20, pady=5, sticky="e")
+        self.lbl_sess_cost.grid(row=1, column=1, padx=15, pady=5, sticky="e")
+        
         self.lbl_sess_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
-        self.lbl_sess_kwh.grid(row=1, column=2, padx=20, pady=5, sticky="e")
+        self.lbl_sess_kwh.grid(row=1, column=2, padx=15, pady=5, sticky="e")
+        
+        self.lbl_sess_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color="silver")
+        self.lbl_sess_time.grid(row=1, column=3, padx=20, pady=5, sticky="e")
 
-        # Row 2: Today (Dynamic Timer)
-        self.lbl_day_title = ctk.CTkLabel(self.frame_stats, text="Today (00:00:00):", font=("Arial", 14)) # <--- Dynamic
-        self.lbl_day_title.grid(row=2, column=0, padx=20, pady=5, sticky="w")
+        # Row 2: Today
+        ctk.CTkLabel(self.frame_stats, text="Today:", font=("Arial", 14)).grid(row=2, column=0, padx=20, pady=5, sticky="w")
+        
         self.lbl_day_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00FF00")
-        self.lbl_day_cost.grid(row=2, column=1, padx=20, pady=5, sticky="e")
+        self.lbl_day_cost.grid(row=2, column=1, padx=15, pady=5, sticky="e")
+        
         self.lbl_day_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
-        self.lbl_day_kwh.grid(row=2, column=2, padx=20, pady=5, sticky="e")
+        self.lbl_day_kwh.grid(row=2, column=2, padx=15, pady=5, sticky="e")
+        
+        self.lbl_day_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color="silver")
+        self.lbl_day_time.grid(row=2, column=3, padx=20, pady=5, sticky="e")
 
-        # Row 3: Lifetime (Dynamic Timer)
-        self.lbl_life_title = ctk.CTkLabel(self.frame_stats, text="Overall (00:00:00):", font=("Arial", 14)) # <--- Dynamic
-        self.lbl_life_title.grid(row=3, column=0, padx=20, pady=5, sticky="w")
+        # Row 3: Lifetime
+        ctk.CTkLabel(self.frame_stats, text="Overall:", font=("Arial", 14)).grid(row=3, column=0, padx=20, pady=5, sticky="w")
+        
         self.lbl_life_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#FFA500")
-        self.lbl_life_cost.grid(row=3, column=1, padx=20, pady=5, sticky="e")
+        self.lbl_life_cost.grid(row=3, column=1, padx=15, pady=5, sticky="e")
+        
         self.lbl_life_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
-        self.lbl_life_kwh.grid(row=3, column=2, padx=20, pady=5, sticky="e")
+        self.lbl_life_kwh.grid(row=3, column=2, padx=15, pady=5, sticky="e")
+        
+        self.lbl_life_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color="silver")
+        self.lbl_life_time.grid(row=3, column=3, padx=20, pady=5, sticky="e")
 
         # Status Bar
         self.lbl_status = ctk.CTkLabel(self, text="Initializing...", text_color="gray", font=("Arial", 11))
@@ -135,27 +152,22 @@ class PowerMonitorApp(ctk.CTk):
             try:
                 with open(STATE_FILE, 'r') as f:
                     data = json.load(f)
-                    
-                    # Auto-Fix: Add new time keys if missing
+                    # Auto-Repair keys
                     if "lifetime_seconds" not in data:
                         data["lifetime_seconds"] = 0
                         data["day_seconds"] = 0
-                    
-                    # Auto-Fix: Add lifetime keys if very old file
                     if "lifetime_kwh" not in data:
                         data["lifetime_kwh"] = data.get("total_kwh", 0.0)
                         data["lifetime_cost"] = data.get("total_cost", 0.0)
                         data["day_kwh"] = 0.0
                         data["day_cost"] = 0.0
                         data["last_date"] = today_str
-                    
                     # Daily Reset
                     if data.get("last_date") != today_str:
                         data["last_date"] = today_str
                         data["day_kwh"] = 0.0
                         data["day_cost"] = 0.0
                         data["day_seconds"] = 0
-                        
                     return data
             except: pass
         return default_data
@@ -218,7 +230,6 @@ class PowerMonitorApp(ctk.CTk):
         return acc
 
     def format_time(self, seconds):
-        """Converts seconds to HH:MM:SS (Can go > 24h)"""
         m, s = divmod(int(seconds), 60)
         h, m = divmod(m, 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
@@ -259,23 +270,18 @@ class PowerMonitorApp(ctk.CTk):
             total_w = dgpu_w + igpu_w + cpu_w + overhead
 
             # 3. CALCULATE INCREMENTS
-            # We assume this loop runs approx once per second
             kwh_inc = (total_w * 1.0) / 3_600_000
             cost_inc = kwh_inc * PRICE_PER_KWH
 
-            # Update Metrics
             self.session_data["kwh"] += kwh_inc
             self.session_data["cost"] += cost_inc
-            
             self.persistent_data["day_kwh"] += kwh_inc
             self.persistent_data["day_cost"] += cost_inc
-            self.persistent_data["day_seconds"] += 1 # Add 1 second
-            
+            self.persistent_data["day_seconds"] += 1
             self.persistent_data["lifetime_kwh"] += kwh_inc
             self.persistent_data["lifetime_cost"] += cost_inc
-            self.persistent_data["lifetime_seconds"] += 1 # Add 1 second
+            self.persistent_data["lifetime_seconds"] += 1
 
-            # Daily Rollover Check
             current_date = datetime.now().strftime("%Y-%m-%d")
             if current_date != self.persistent_data["last_date"]:
                 self.persistent_data["last_date"] = current_date
@@ -285,16 +291,16 @@ class PowerMonitorApp(ctk.CTk):
 
             # 4. GUI UPDATE
             try:
-                # Update Timer Strings
+                # Update Timer Labels (New Column)
                 sess_str = self.format_time(time.time() - self.start_time)
                 day_str = self.format_time(self.persistent_data["day_seconds"])
                 life_str = self.format_time(self.persistent_data["lifetime_seconds"])
+                
+                self.lbl_sess_time.configure(text=sess_str)
+                self.lbl_day_time.configure(text=day_str)
+                self.lbl_life_time.configure(text=life_str)
 
-                self.lbl_sess_title.configure(text=f"Session ({sess_str}):")
-                self.lbl_day_title.configure(text=f"Today ({day_str}):")
-                self.lbl_life_title.configure(text=f"Overall ({life_str}):")
-
-                # Update Watts & Colors
+                # Update Watts
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
                 self.lbl_dgpu_val.configure(text=f"{int(dgpu_w)} W")
                 self.lbl_igpu_val.configure(text=f"{int(igpu_w)} W")
@@ -308,7 +314,7 @@ class PowerMonitorApp(ctk.CTk):
                 color_state = "gray" if is_estimated else "#ff8c00"
                 self.lbl_cpu_val.configure(text_color=color_state)
 
-                # Update Stats Numbers
+                # Update Stats
                 self.lbl_sess_cost.configure(text=f"{self.session_data['cost']:.4f}")
                 self.lbl_sess_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
                 self.lbl_day_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
