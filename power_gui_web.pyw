@@ -22,13 +22,13 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 1. Window Setup (Wider for 4 columns)
-        self.title("⚡ Power Monitor (Clean Grid)")
+        # 1. Window Setup
+        self.title("⚡ Power Monitor (Multi-GPU)")
         self.geometry("700x620") 
         self.resizable(False, False)
 
         # 2. Hardware Init
-        self.gpu_handle = None
+        self.gpu_handles = [] # List for multiple GPUs
         self.nvml_active = False
         self.setup_nvml()
         
@@ -40,11 +40,9 @@ class PowerMonitorApp(ctk.CTk):
         self.save_data()
 
         # --- UI LAYOUT ---
-        # Title
         self.lbl_title = ctk.CTkLabel(self, text="Real-Time Consumption", font=("Roboto", 22, "bold"))
         self.lbl_title.pack(pady=(20, 5))
 
-        # Big Watts
         self.lbl_watts = ctk.CTkLabel(self, text="--- W", font=("Roboto", 60, "bold"), text_color="#00E5FF")
         self.lbl_watts.pack(pady=5)
         
@@ -52,10 +50,12 @@ class PowerMonitorApp(ctk.CTk):
         self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_hw.pack(pady=10, padx=10, fill="x")
 
-        # NVIDIA
+        # NVIDIA (Dynamic Label)
+        nv_label = "NVIDIA GPU" if len(self.gpu_handles) < 2 else f"{len(self.gpu_handles)}x NVIDIA GPUs"
+        
         self.frame_dgpu = ctk.CTkFrame(self.frame_hw, width=150)
         self.frame_dgpu.pack(side="left", expand=True, padx=5)
-        ctk.CTkLabel(self.frame_dgpu, text="RTX 4070 Ti", font=("Arial", 11, "bold"), text_color="#76b900").pack(pady=5)
+        ctk.CTkLabel(self.frame_dgpu, text=nv_label, font=("Arial", 11, "bold"), text_color="#76b900").pack(pady=5)
         self.lbl_dgpu_val = ctk.CTkLabel(self.frame_dgpu, text="0 W", font=("Roboto", 20, "bold"))
         self.lbl_dgpu_val.pack(pady=(0, 10))
 
@@ -73,60 +73,43 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 20, "bold"))
         self.lbl_cpu_val.pack(pady=(0, 10))
 
-        # --- STATS GRID (4 Columns Now) ---
+        # --- STATS GRID ---
         self.frame_stats = ctk.CTkFrame(self)
         self.frame_stats.pack(pady=20, padx=20, fill="x")
 
         # Headers
-        self.lbl_h1 = ctk.CTkLabel(self.frame_stats, text="TIMELINE", font=("Arial", 12, "bold"), text_color="gray")
-        self.lbl_h1.grid(row=0, column=0, padx=20, pady=10, sticky="w")
-        
-        self.lbl_h2 = ctk.CTkLabel(self.frame_stats, text="COST (EGP)", font=("Arial", 12, "bold"), text_color="gray")
-        self.lbl_h2.grid(row=0, column=1, padx=15, pady=10, sticky="e")
-        
-        self.lbl_h3 = ctk.CTkLabel(self.frame_stats, text="ENERGY", font=("Arial", 12, "bold"), text_color="gray")
-        self.lbl_h3.grid(row=0, column=2, padx=15, pady=10, sticky="e")
-        
-        self.lbl_h4 = ctk.CTkLabel(self.frame_stats, text="DURATION", font=("Arial", 12, "bold"), text_color="gray")
-        self.lbl_h4.grid(row=0, column=3, padx=20, pady=10, sticky="e")
+        ctk.CTkLabel(self.frame_stats, text="TIMELINE", font=("Arial", 12, "bold"), text_color="gray").grid(row=0, column=0, padx=20, pady=10, sticky="w")
+        ctk.CTkLabel(self.frame_stats, text="COST (EGP)", font=("Arial", 12, "bold"), text_color="gray").grid(row=0, column=1, padx=15, pady=10, sticky="e")
+        ctk.CTkLabel(self.frame_stats, text="ENERGY", font=("Arial", 12, "bold"), text_color="gray").grid(row=0, column=2, padx=15, pady=10, sticky="e")
+        ctk.CTkLabel(self.frame_stats, text="DURATION", font=("Arial", 12, "bold"), text_color="gray").grid(row=0, column=3, padx=20, pady=10, sticky="e")
 
         # Row 1: Session
         ctk.CTkLabel(self.frame_stats, text="Session:", font=("Arial", 14)).grid(row=1, column=0, padx=20, pady=5, sticky="w")
-        
         self.lbl_sess_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00E5FF")
         self.lbl_sess_cost.grid(row=1, column=1, padx=15, pady=5, sticky="e")
-        
         self.lbl_sess_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
         self.lbl_sess_kwh.grid(row=1, column=2, padx=15, pady=5, sticky="e")
-        
         self.lbl_sess_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color="silver")
         self.lbl_sess_time.grid(row=1, column=3, padx=20, pady=5, sticky="e")
 
         # Row 2: Today
         ctk.CTkLabel(self.frame_stats, text="Today:", font=("Arial", 14)).grid(row=2, column=0, padx=20, pady=5, sticky="w")
-        
         self.lbl_day_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00FF00")
         self.lbl_day_cost.grid(row=2, column=1, padx=15, pady=5, sticky="e")
-        
         self.lbl_day_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
         self.lbl_day_kwh.grid(row=2, column=2, padx=15, pady=5, sticky="e")
-        
         self.lbl_day_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color="silver")
         self.lbl_day_time.grid(row=2, column=3, padx=20, pady=5, sticky="e")
 
         # Row 3: Lifetime
         ctk.CTkLabel(self.frame_stats, text="Overall:", font=("Arial", 14)).grid(row=3, column=0, padx=20, pady=5, sticky="w")
-        
         self.lbl_life_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#FFA500")
         self.lbl_life_cost.grid(row=3, column=1, padx=15, pady=5, sticky="e")
-        
         self.lbl_life_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
         self.lbl_life_kwh.grid(row=3, column=2, padx=15, pady=5, sticky="e")
-        
         self.lbl_life_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color="silver")
         self.lbl_life_time.grid(row=3, column=3, padx=20, pady=5, sticky="e")
 
-        # Status Bar
         self.lbl_status = ctk.CTkLabel(self, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack(side="bottom", pady=10)
 
@@ -135,11 +118,24 @@ class PowerMonitorApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_nvml(self):
+        """Modified to scan ALL GPUs, not just Index 0"""
         try:
             pynvml.nvmlInit()
-            self.gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            count = pynvml.nvmlDeviceGetCount()
+            print(f"✅ Found {count} NVIDIA GPU(s)")
+            
+            for i in range(count):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                self.gpu_handles.append(handle)
+                name = pynvml.nvmlDeviceGetName(handle)
+                # Decode bytes if needed
+                if isinstance(name, bytes): name = name.decode()
+                print(f"   - GPU {i}: {name}")
+                
             self.nvml_active = True
-        except: self.nvml_active = False
+        except Exception as e:
+            print(f"⚠️ NVML Error: {e}")
+            self.nvml_active = False
 
     def load_data(self):
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -152,7 +148,6 @@ class PowerMonitorApp(ctk.CTk):
             try:
                 with open(STATE_FILE, 'r') as f:
                     data = json.load(f)
-                    # Auto-Repair keys
                     if "lifetime_seconds" not in data:
                         data["lifetime_seconds"] = 0
                         data["day_seconds"] = 0
@@ -162,7 +157,6 @@ class PowerMonitorApp(ctk.CTk):
                         data["day_kwh"] = 0.0
                         data["day_cost"] = 0.0
                         data["last_date"] = today_str
-                    # Daily Reset
                     if data.get("last_date") != today_str:
                         data["last_date"] = today_str
                         data["day_kwh"] = 0.0
@@ -238,11 +232,14 @@ class PowerMonitorApp(ctk.CTk):
         last_log = time.time()
         
         while self.running:
-            # 1. READ HARDWARE
-            dgpu_w = 0
+            # 1. READ ALL NVIDIA GPUs
+            total_nvidia_w = 0
             if self.nvml_active:
-                try: dgpu_w = pynvml.nvmlDeviceGetPowerUsage(self.gpu_handle) / 1000.0
-                except: pass
+                for handle in self.gpu_handles:
+                    try: 
+                        w = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0
+                        total_nvidia_w += w
+                    except: pass
 
             lhm_data = self.fetch_lhm_data()
             cpu_w, igpu_w = 0, 0
@@ -257,17 +254,20 @@ class PowerMonitorApp(ctk.CTk):
                 is_estimated = True
                 status_msg = "Estimating (LHM Off)"
                 base_load = 45
-                gpu_util = 0
+                
+                # Fallback Estimate for dual GPUs (roughly)
+                total_nvidia_w = 0 # Cannot read without driver
                 if self.nvml_active:
-                    try: gpu_util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle).gpu
-                    except: pass
-                if gpu_util < 10: cpu_w = 35
-                elif gpu_util < 50: cpu_w = 55
-                else: cpu_w = 75
-
+                    # If NVML works but LHM fails, we still have GPU power
+                    pass
+                else:
+                    # Blind estimate
+                    cpu_w = 55 
+            
             # 2. TOTALS
-            overhead = 45
-            total_w = dgpu_w + igpu_w + cpu_w + overhead
+            # Base overhead: Mobo + RAM + Fans + Pump + 2nd GPU overhead
+            overhead = 55 
+            total_w = total_nvidia_w + igpu_w + cpu_w + overhead
 
             # 3. CALCULATE INCREMENTS
             kwh_inc = (total_w * 1.0) / 3_600_000
@@ -291,7 +291,6 @@ class PowerMonitorApp(ctk.CTk):
 
             # 4. GUI UPDATE
             try:
-                # Update Timer Labels (New Column)
                 sess_str = self.format_time(time.time() - self.start_time)
                 day_str = self.format_time(self.persistent_data["day_seconds"])
                 life_str = self.format_time(self.persistent_data["lifetime_seconds"])
@@ -302,7 +301,7 @@ class PowerMonitorApp(ctk.CTk):
 
                 # Update Watts
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
-                self.lbl_dgpu_val.configure(text=f"{int(dgpu_w)} W")
+                self.lbl_dgpu_val.configure(text=f"{int(total_nvidia_w)} W") # Sum of both
                 self.lbl_igpu_val.configure(text=f"{int(igpu_w)} W")
                 self.lbl_cpu_val.configure(text=f"{int(cpu_w)} W")
                 self.lbl_status.configure(text=status_msg)
@@ -314,17 +313,14 @@ class PowerMonitorApp(ctk.CTk):
                 color_state = "gray" if is_estimated else "#ff8c00"
                 self.lbl_cpu_val.configure(text_color=color_state)
 
-                # Update Stats
                 self.lbl_sess_cost.configure(text=f"{self.session_data['cost']:.4f}")
                 self.lbl_sess_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
                 self.lbl_day_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
                 self.lbl_day_kwh.configure(text=f"{self.persistent_data['day_kwh']:.4f} kWh")
                 self.lbl_life_cost.configure(text=f"{self.persistent_data['lifetime_cost']:.4f}")
                 self.lbl_life_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
-
             except: pass
 
-            # 5. SAVE
             if time.time() - last_log > 60:
                 self.save_data()
                 last_log = time.time()
