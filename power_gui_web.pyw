@@ -22,17 +22,22 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 1. Window Setup
-        self.title("⚡ Power Monitor (Multi-GPU)")
-        self.geometry("700x620") 
-        self.resizable(False, False)
-
-        # 2. Hardware Init
-        self.gpu_handles = [] # List for multiple GPUs
+        # 1. Hardware Init (MUST be done before UI to know how many columns needed)
+        self.gpu_data = [] # Stores {handle, name, label_widget}
         self.nvml_active = False
         self.setup_nvml()
         
-        # 3. Data Init
+        # Calculate Window Width based on number of GPUs
+        # Base width (Stats) + (Number of NVIDIA GPUs * 140px)
+        # Minimum width 750, add space for extra cards
+        extra_width = max(0, (len(self.gpu_data) - 1) * 140) 
+        window_width = 750 + extra_width
+        
+        self.title("⚡ Power Monitor (Multi-GPU Individual)")
+        self.geometry(f"{window_width}x620") 
+        self.resizable(True, False) # Allow resizing width if needed
+
+        # 2. Data Init
         self.running = True
         self.start_time = time.time()
         self.session_data = {"kwh": 0.0, "cost": 0.0}
@@ -46,28 +51,37 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_watts = ctk.CTkLabel(self, text="--- W", font=("Roboto", 60, "bold"), text_color="#00E5FF")
         self.lbl_watts.pack(pady=5)
         
-        # Hardware Split
+        # --- DYNAMIC HARDWARE SPLIT ---
         self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_hw.pack(pady=10, padx=10, fill="x")
 
-        # NVIDIA (Dynamic Label)
-        nv_label = "NVIDIA GPU" if len(self.gpu_handles) < 2 else f"{len(self.gpu_handles)}x NVIDIA GPUs"
+        # A. Create a column for EACH NVIDIA GPU found
+        self.nv_labels = [] # Store label references to update later
         
-        self.frame_dgpu = ctk.CTkFrame(self.frame_hw, width=150)
-        self.frame_dgpu.pack(side="left", expand=True, padx=5)
-        ctk.CTkLabel(self.frame_dgpu, text=nv_label, font=("Arial", 11, "bold"), text_color="#76b900").pack(pady=5)
-        self.lbl_dgpu_val = ctk.CTkLabel(self.frame_dgpu, text="0 W", font=("Roboto", 20, "bold"))
-        self.lbl_dgpu_val.pack(pady=(0, 10))
+        if self.nvml_active:
+            for i, gpu in enumerate(self.gpu_data):
+                # Clean up long names (e.g. "NVIDIA GeForce RTX 4070 Ti" -> "RTX 4070 Ti")
+                short_name = gpu['name'].replace("NVIDIA GeForce ", "").replace("NVIDIA ", "")
+                
+                frame = ctk.CTkFrame(self.frame_hw, width=140)
+                frame.pack(side="left", expand=True, padx=5)
+                
+                ctk.CTkLabel(frame, text=short_name, font=("Arial", 11, "bold"), text_color="#76b900").pack(pady=5)
+                lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 20, "bold"))
+                lbl_val.pack(pady=(0, 10))
+                
+                # Store the label widget in our data structure so we can update it
+                self.gpu_data[i]['widget'] = lbl_val
 
-        # Radeon
-        self.frame_igpu = ctk.CTkFrame(self.frame_hw, width=150)
+        # B. Create Column for Radeon iGPU
+        self.frame_igpu = ctk.CTkFrame(self.frame_hw, width=140)
         self.frame_igpu.pack(side="left", expand=True, padx=5)
         ctk.CTkLabel(self.frame_igpu, text="iGPU (Radeon)", font=("Arial", 11, "bold"), text_color="#FF3333").pack(pady=5)
         self.lbl_igpu_val = ctk.CTkLabel(self.frame_igpu, text="0 W", font=("Roboto", 20, "bold"))
         self.lbl_igpu_val.pack(pady=(0, 10))
 
-        # Ryzen
-        self.frame_cpu = ctk.CTkFrame(self.frame_hw, width=150)
+        # C. Create Column for Ryzen CPU
+        self.frame_cpu = ctk.CTkFrame(self.frame_hw, width=140)
         self.frame_cpu.pack(side="right", expand=True, padx=5)
         ctk.CTkLabel(self.frame_cpu, text="Ryzen 9900X", font=("Arial", 11, "bold"), text_color="#ff8c00").pack(pady=5)
         self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 20, "bold"))
@@ -118,7 +132,7 @@ class PowerMonitorApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_nvml(self):
-        """Modified to scan ALL GPUs, not just Index 0"""
+        """Scans for all NVIDIA GPUs and stores them in self.gpu_data"""
         try:
             pynvml.nvmlInit()
             count = pynvml.nvmlDeviceGetCount()
@@ -126,10 +140,15 @@ class PowerMonitorApp(ctk.CTk):
             
             for i in range(count):
                 handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-                self.gpu_handles.append(handle)
-                name = pynvml.nvmlDeviceGetName(handle)
-                # Decode bytes if needed
-                if isinstance(name, bytes): name = name.decode()
+                raw_name = pynvml.nvmlDeviceGetName(handle)
+                name = raw_name.decode() if isinstance(raw_name, bytes) else raw_name
+                
+                # Add to list
+                self.gpu_data.append({
+                    "handle": handle,
+                    "name": name,
+                    "widget": None # Will be filled in __init__
+                })
                 print(f"   - GPU {i}: {name}")
                 
             self.nvml_active = True
@@ -148,6 +167,7 @@ class PowerMonitorApp(ctk.CTk):
             try:
                 with open(STATE_FILE, 'r') as f:
                     data = json.load(f)
+                    # Auto-Repair keys
                     if "lifetime_seconds" not in data:
                         data["lifetime_seconds"] = 0
                         data["day_seconds"] = 0
@@ -157,6 +177,7 @@ class PowerMonitorApp(ctk.CTk):
                         data["day_kwh"] = 0.0
                         data["day_cost"] = 0.0
                         data["last_date"] = today_str
+                    # Daily Reset
                     if data.get("last_date") != today_str:
                         data["last_date"] = today_str
                         data["day_kwh"] = 0.0
@@ -232,13 +253,18 @@ class PowerMonitorApp(ctk.CTk):
         last_log = time.time()
         
         while self.running:
-            # 1. READ ALL NVIDIA GPUs
+            # 1. READ ALL NVIDIA GPUs INDIVIDUALLY
             total_nvidia_w = 0
+            
             if self.nvml_active:
-                for handle in self.gpu_handles:
+                for gpu in self.gpu_data:
                     try: 
-                        w = pynvml.nvmlDeviceGetPowerUsage(handle) / 1000.0
+                        w = pynvml.nvmlDeviceGetPowerUsage(gpu['handle']) / 1000.0
                         total_nvidia_w += w
+                        
+                        # Update individual label immediately
+                        if gpu['widget']:
+                            gpu['widget'].configure(text=f"{int(w)} W")
                     except: pass
 
             lhm_data = self.fetch_lhm_data()
@@ -255,17 +281,12 @@ class PowerMonitorApp(ctk.CTk):
                 status_msg = "Estimating (LHM Off)"
                 base_load = 45
                 
-                # Fallback Estimate for dual GPUs (roughly)
-                total_nvidia_w = 0 # Cannot read without driver
-                if self.nvml_active:
-                    # If NVML works but LHM fails, we still have GPU power
-                    pass
-                else:
-                    # Blind estimate
+                # Fallback Estimate logic
+                if not self.nvml_active:
                     cpu_w = 55 
             
             # 2. TOTALS
-            # Base overhead: Mobo + RAM + Fans + Pump + 2nd GPU overhead
+            # Base overhead: Mobo + RAM + Fans + Pump + Overhead for 2nd GPU idle
             overhead = 55 
             total_w = total_nvidia_w + igpu_w + cpu_w + overhead
 
@@ -299,9 +320,8 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_day_time.configure(text=day_str)
                 self.lbl_life_time.configure(text=life_str)
 
-                # Update Watts
+                # Update General Watts
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
-                self.lbl_dgpu_val.configure(text=f"{int(total_nvidia_w)} W") # Sum of both
                 self.lbl_igpu_val.configure(text=f"{int(igpu_w)} W")
                 self.lbl_cpu_val.configure(text=f"{int(cpu_w)} W")
                 self.lbl_status.configure(text=status_msg)
@@ -313,6 +333,7 @@ class PowerMonitorApp(ctk.CTk):
                 color_state = "gray" if is_estimated else "#ff8c00"
                 self.lbl_cpu_val.configure(text_color=color_state)
 
+                # Update Stats
                 self.lbl_sess_cost.configure(text=f"{self.session_data['cost']:.4f}")
                 self.lbl_sess_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
                 self.lbl_day_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
@@ -321,6 +342,7 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_life_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
             except: pass
 
+            # 5. SAVE
             if time.time() - last_log > 60:
                 self.save_data()
                 last_log = time.time()
