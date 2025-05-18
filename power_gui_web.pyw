@@ -3,6 +3,7 @@ import threading
 import time
 import json
 import os
+import csv  # <--- NEW: For Excel Logging
 import pynvml
 import requests
 from datetime import datetime
@@ -10,6 +11,7 @@ from datetime import datetime
 # --- CONFIGURATION ---
 PRICE_PER_KWH = 2.14          
 STATE_FILE = "power_state.json"
+LOG_FILE = "power_log.csv"  # <--- NEW: Excel File
 LHM_URL = "http://localhost:8085/data.json"
 
 # --- SYSTEM SETUP ---
@@ -31,7 +33,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data) - 1) * 140) 
         window_width = 750 + extra_width
         
-        self.title("⚡ Power Monitor (Temp + Power)")
+        self.title("⚡ Power Monitor (Excel Logger)")
         self.geometry(f"{window_width}x640") 
         self.resizable(True, False)
 
@@ -41,6 +43,7 @@ class PowerMonitorApp(ctk.CTk):
         self.session_data = {"kwh": 0.0, "cost": 0.0}
         self.persistent_data = self.load_data()
         self.save_data()
+        self.init_csv() # <--- NEW: Setup Excel File
 
         # --- UI LAYOUT ---
         self.lbl_title = ctk.CTkLabel(self, text="Real-Time Consumption", font=("Roboto", 22, "bold"))
@@ -53,7 +56,7 @@ class PowerMonitorApp(ctk.CTk):
         self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_hw.pack(pady=10, padx=10, fill="x")
 
-        # A. NVIDIA GPUs (Dynamic)
+        # A. NVIDIA GPUs
         if self.nvml_active:
             for i, gpu in enumerate(self.gpu_data):
                 short_name = gpu['name'].replace("NVIDIA GeForce ", "").replace("NVIDIA ", "")
@@ -62,12 +65,8 @@ class PowerMonitorApp(ctk.CTk):
                 frame.pack(side="left", expand=True, padx=5)
                 
                 ctk.CTkLabel(frame, text=short_name, font=("Arial", 11, "bold"), text_color="#76b900").pack(pady=(5,0))
-                
-                # Power Label
                 lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 20, "bold"))
                 lbl_val.pack(pady=(0, 0))
-                
-                # Temp Label (NEW)
                 lbl_temp = ctk.CTkLabel(frame, text="-- °C", font=("Arial", 12), text_color="gray")
                 lbl_temp.pack(pady=(0, 10))
                 
@@ -163,6 +162,38 @@ class PowerMonitorApp(ctk.CTk):
     def save_data(self):
         with open(STATE_FILE, 'w') as f: json.dump(self.persistent_data, f, indent=4)
 
+    def init_csv(self):
+        """Creates the CSV file with headers if it doesn't exist"""
+        if not os.path.exists(LOG_FILE):
+            headers = ["Timestamp", "Total Watts", "Total Cost (Daily)", "CPU Temp", "CPU Watts", "iGPU Temp", "iGPU Watts"]
+            # Add dynamic GPU columns
+            for i in range(len(self.gpu_data)):
+                headers.extend([f"GPU{i} Temp", f"GPU{i} Watts"])
+                
+            with open(LOG_FILE, mode='w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+
+    def log_to_csv(self, total_w, cpu_t, cpu_w, igpu_t, igpu_w, nv_metrics):
+        """Appends a row to the CSV"""
+        try:
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            row = [
+                now_str, 
+                f"{total_w:.1f}", 
+                f"{self.persistent_data['day_cost']:.4f}",
+                f"{cpu_t:.1f}", f"{cpu_w:.1f}",
+                f"{igpu_t:.1f}", f"{igpu_w:.1f}"
+            ]
+            # Add individual GPU data
+            for metric in nv_metrics:
+                row.extend([f"{metric['temp']:.1f}", f"{metric['power']:.1f}"])
+                
+            with open(LOG_FILE, mode='a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(row)
+        except: pass
+
     def fetch_lhm_data(self):
         try:
             response = requests.get(LHM_URL, timeout=0.2)
@@ -171,10 +202,8 @@ class PowerMonitorApp(ctk.CTk):
         return None
 
     def find_sensor_value(self, node, target_names, sensor_type="Power"):
-        """Generic finder for both Power and Temperature"""
         if isinstance(node, dict):
             if node.get("Type") == sensor_type:
-                # Check if sensor text matches any target name
                 if any(name.lower() in node.get("Text", "").lower() for name in target_names):
                     val_str = str(node.get("Value", "0")).split()[0]
                     try: return float(val_str)
@@ -220,9 +249,9 @@ class PowerMonitorApp(ctk.CTk):
         return acc
 
     def get_color(self, temp):
-        if temp < 60: return "#76b900" # Green
-        if temp < 80: return "#ff8c00" # Orange
-        return "#FF4444" # Red
+        if temp < 60: return "#76b900"
+        if temp < 80: return "#ff8c00"
+        return "#FF4444"
 
     def format_time(self, seconds):
         m, s = divmod(int(seconds), 60)
@@ -234,23 +263,23 @@ class PowerMonitorApp(ctk.CTk):
         
         while self.running:
             total_nvidia_w = 0
+            nv_metrics = [] # Store temp/power for CSV
             
-            # 1. Update NVIDIA GPUs (Power + Temp)
+            # 1. Update NVIDIA GPUs
             if self.nvml_active:
                 for gpu in self.gpu_data:
                     try: 
-                        # Power
                         w = pynvml.nvmlDeviceGetPowerUsage(gpu['handle']) / 1000.0
                         total_nvidia_w += w
+                        t = pynvml.nvmlDeviceGetTemperature(gpu['handle'], 0)
                         
-                        # Temp
-                        t = pynvml.nvmlDeviceGetTemperature(gpu['handle'], 0) # 0 = GPU sensor
+                        nv_metrics.append({"power": w, "temp": t})
                         
-                        # UI Update
                         if gpu['widget_pwr']:
                             gpu['widget_pwr'].configure(text=f"{int(w)} W")
                             gpu['widget_temp'].configure(text=f"{t} °C", text_color=self.get_color(t))
-                    except: pass
+                    except: 
+                        nv_metrics.append({"power": 0, "temp": 0})
 
             lhm_data = self.fetch_lhm_data()
             cpu_w, igpu_w = 0, 0
@@ -259,12 +288,9 @@ class PowerMonitorApp(ctk.CTk):
             status_msg = "Live Data"
 
             if lhm_data:
-                # Power
                 cpu_w = self.find_sensor_value(lhm_data, ["Package", "CPU Package"], "Power")
                 igpu_w = self.calculate_igpu_total(lhm_data)
-                
-                # Temps
-                cpu_t = self.find_sensor_value(lhm_data, ["Core (Tctl/Tdie)", "Package", "Core #1", "CCD1"], "Temperature")
+                cpu_t = self.find_sensor_value(lhm_data, ["Core (Tctl/Tdie)", "Package", "Core #1"], "Temperature")
                 igpu_t = self.find_sensor_value(lhm_data, ["GPU Core", "GPU Temperature"], "Temperature")
                 
                 if cpu_w == 0: is_estimated = True
@@ -289,7 +315,6 @@ class PowerMonitorApp(ctk.CTk):
             self.persistent_data["lifetime_cost"] += cost_inc
             self.persistent_data["lifetime_seconds"] += 1
 
-            # Day Reset
             current_date = datetime.now().strftime("%Y-%m-%d")
             if current_date != self.persistent_data["last_date"]:
                 self.persistent_data["last_date"] = current_date
@@ -299,31 +324,25 @@ class PowerMonitorApp(ctk.CTk):
 
             # 4. GUI Update
             try:
-                # Timers
                 self.lbl_sess_time.configure(text=self.format_time(time.time() - self.start_time))
                 self.lbl_day_time.configure(text=self.format_time(self.persistent_data["day_seconds"]))
                 self.lbl_life_time.configure(text=self.format_time(self.persistent_data["lifetime_seconds"]))
 
-                # Main Numbers
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
                 self.lbl_igpu_val.configure(text=f"{int(igpu_w)} W")
                 self.lbl_cpu_val.configure(text=f"{int(cpu_w)} W")
                 self.lbl_status.configure(text=status_msg)
 
-                # Temp Colors
                 self.lbl_igpu_temp.configure(text=f"{int(igpu_t)} °C", text_color=self.get_color(igpu_t))
                 self.lbl_cpu_temp.configure(text=f"{int(cpu_t)} °C", text_color=self.get_color(cpu_t))
 
-                # Main Color
                 if total_w > 500: self.lbl_watts.configure(text_color="#FF4444")
                 elif total_w > 300: self.lbl_watts.configure(text_color="#FFD700")
                 else: self.lbl_watts.configure(text_color="#00E5FF")
                 
-                # CPU Text Color
                 color_state = "gray" if is_estimated else "#ff8c00"
                 self.lbl_cpu_val.configure(text_color=color_state)
 
-                # Costs
                 self.lbl_sess_cost.configure(text=f"{self.session_data['cost']:.4f}")
                 self.lbl_sess_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
                 self.lbl_day_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
@@ -332,8 +351,10 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_life_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
             except: pass
 
+            # 5. SAVE & LOG (Every 60s)
             if time.time() - last_log > 60:
                 self.save_data()
+                self.log_to_csv(total_w, cpu_t, cpu_w, igpu_t, igpu_w, nv_metrics) # <--- LOGGING HAPPENS HERE
                 last_log = time.time()
             time.sleep(1)
 
