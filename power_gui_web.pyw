@@ -3,15 +3,16 @@ import threading
 import time
 import json
 import os
-import csv  # <--- NEW: For Excel Logging
+import csv
 import pynvml
 import requests
 from datetime import datetime
 
 # --- CONFIGURATION ---
 PRICE_PER_KWH = 2.14          
+DAILY_LIMIT_EGP = 10.00       # <--- NEW: Set your daily budget here!
 STATE_FILE = "power_state.json"
-LOG_FILE = "power_log.csv"  # <--- NEW: Excel File
+LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
 
 # --- SYSTEM SETUP ---
@@ -33,7 +34,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data) - 1) * 140) 
         window_width = 750 + extra_width
         
-        self.title("⚡ Power Monitor (Excel Logger)")
+        self.title("⚡ Power Monitor (Budget Alert)")
         self.geometry(f"{window_width}x640") 
         self.resizable(True, False)
 
@@ -43,7 +44,7 @@ class PowerMonitorApp(ctk.CTk):
         self.session_data = {"kwh": 0.0, "cost": 0.0}
         self.persistent_data = self.load_data()
         self.save_data()
-        self.init_csv() # <--- NEW: Setup Excel File
+        self.init_csv()
 
         # --- UI LAYOUT ---
         self.lbl_title = ctk.CTkLabel(self, text="Real-Time Consumption", font=("Roboto", 22, "bold"))
@@ -163,35 +164,24 @@ class PowerMonitorApp(ctk.CTk):
         with open(STATE_FILE, 'w') as f: json.dump(self.persistent_data, f, indent=4)
 
     def init_csv(self):
-        """Creates the CSV file with headers if it doesn't exist"""
         if not os.path.exists(LOG_FILE):
             headers = ["Timestamp", "Total Watts", "Total Cost (Daily)", "CPU Temp", "CPU Watts", "iGPU Temp", "iGPU Watts"]
-            # Add dynamic GPU columns
             for i in range(len(self.gpu_data)):
                 headers.extend([f"GPU{i} Temp", f"GPU{i} Watts"])
-                
             with open(LOG_FILE, mode='w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
+                csv.writer(f).writerow(headers)
 
     def log_to_csv(self, total_w, cpu_t, cpu_w, igpu_t, igpu_w, nv_metrics):
-        """Appends a row to the CSV"""
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             row = [
-                now_str, 
-                f"{total_w:.1f}", 
-                f"{self.persistent_data['day_cost']:.4f}",
-                f"{cpu_t:.1f}", f"{cpu_w:.1f}",
-                f"{igpu_t:.1f}", f"{igpu_w:.1f}"
+                now_str, f"{total_w:.1f}", f"{self.persistent_data['day_cost']:.4f}",
+                f"{cpu_t:.1f}", f"{cpu_w:.1f}", f"{igpu_t:.1f}", f"{igpu_w:.1f}"
             ]
-            # Add individual GPU data
             for metric in nv_metrics:
                 row.extend([f"{metric['temp']:.1f}", f"{metric['power']:.1f}"])
-                
             with open(LOG_FILE, mode='a', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(row)
+                csv.writer(f).writerow(row)
         except: pass
 
     def fetch_lhm_data(self):
@@ -263,7 +253,7 @@ class PowerMonitorApp(ctk.CTk):
         
         while self.running:
             total_nvidia_w = 0
-            nv_metrics = [] # Store temp/power for CSV
+            nv_metrics = [] 
             
             # 1. Update NVIDIA GPUs
             if self.nvml_active:
@@ -272,9 +262,7 @@ class PowerMonitorApp(ctk.CTk):
                         w = pynvml.nvmlDeviceGetPowerUsage(gpu['handle']) / 1000.0
                         total_nvidia_w += w
                         t = pynvml.nvmlDeviceGetTemperature(gpu['handle'], 0)
-                        
                         nv_metrics.append({"power": w, "temp": t})
-                        
                         if gpu['widget_pwr']:
                             gpu['widget_pwr'].configure(text=f"{int(w)} W")
                             gpu['widget_temp'].configure(text=f"{t} °C", text_color=self.get_color(t))
@@ -292,7 +280,6 @@ class PowerMonitorApp(ctk.CTk):
                 igpu_w = self.calculate_igpu_total(lhm_data)
                 cpu_t = self.find_sensor_value(lhm_data, ["Core (Tctl/Tdie)", "Package", "Core #1"], "Temperature")
                 igpu_t = self.find_sensor_value(lhm_data, ["GPU Core", "GPU Temperature"], "Temperature")
-                
                 if cpu_w == 0: is_estimated = True
             else:
                 is_estimated = True
@@ -315,6 +302,7 @@ class PowerMonitorApp(ctk.CTk):
             self.persistent_data["lifetime_cost"] += cost_inc
             self.persistent_data["lifetime_seconds"] += 1
 
+            # Day Reset
             current_date = datetime.now().strftime("%Y-%m-%d")
             if current_date != self.persistent_data["last_date"]:
                 self.persistent_data["last_date"] = current_date
@@ -331,8 +319,7 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
                 self.lbl_igpu_val.configure(text=f"{int(igpu_w)} W")
                 self.lbl_cpu_val.configure(text=f"{int(cpu_w)} W")
-                self.lbl_status.configure(text=status_msg)
-
+                
                 self.lbl_igpu_temp.configure(text=f"{int(igpu_t)} °C", text_color=self.get_color(igpu_t))
                 self.lbl_cpu_temp.configure(text=f"{int(cpu_t)} °C", text_color=self.get_color(cpu_t))
 
@@ -349,12 +336,27 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_day_kwh.configure(text=f"{self.persistent_data['day_kwh']:.4f} kWh")
                 self.lbl_life_cost.configure(text=f"{self.persistent_data['lifetime_cost']:.4f}")
                 self.lbl_life_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
+                
+                # --- BUDGET ALERT CHECK ---
+                if self.persistent_data["day_cost"] > DAILY_LIMIT_EGP:
+                    # Cost -> RED
+                    self.lbl_day_cost.configure(text_color="#FF4444")
+                    # Flashing Status Msg
+                    if int(time.time()) % 2 == 0:
+                        self.lbl_status.configure(text="⚠️ DAILY BUDGET EXCEEDED ⚠️", text_color="#FF4444")
+                    else:
+                        self.lbl_status.configure(text=f"Limit: {DAILY_LIMIT_EGP:.2f} EGP", text_color="#FF4444")
+                else:
+                    # Normal State
+                    self.lbl_day_cost.configure(text_color="#00FF00")
+                    self.lbl_status.configure(text=status_msg, text_color="gray")
+
             except: pass
 
-            # 5. SAVE & LOG (Every 60s)
+            # 5. Save & Log
             if time.time() - last_log > 60:
                 self.save_data()
-                self.log_to_csv(total_w, cpu_t, cpu_w, igpu_t, igpu_w, nv_metrics) # <--- LOGGING HAPPENS HERE
+                self.log_to_csv(total_w, cpu_t, cpu_w, igpu_t, igpu_w, nv_metrics)
                 last_log = time.time()
             time.sleep(1)
 
