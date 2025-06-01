@@ -10,10 +10,17 @@ from datetime import datetime
 
 # --- CONFIGURATION ---
 PRICE_PER_KWH = 2.14          
-DAILY_LIMIT_EGP = 10.00       # <--- NEW: Set your daily budget here!
+DAILY_LIMIT_EGP = 10.00       
 STATE_FILE = "power_state.json"
 LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
+
+# --- THEME COLORS ---
+COLOR_BG = "#1a1a1a"        # Main Background
+COLOR_CARD = "#2b2b2b"      # Card Background
+COLOR_TEXT_MAIN = "#ffffff"
+COLOR_TEXT_SUB = "#a0a0a0"
+COLOR_ACCENT = "#00E5FF"    # Cyan
 
 # --- SYSTEM SETUP ---
 os.environ["PATH"] += os.pathsep + os.getcwd()
@@ -30,13 +37,15 @@ class PowerMonitorApp(ctk.CTk):
         self.nvml_active = False
         self.setup_nvml()
         
-        # Dynamic Width Calculation
-        extra_width = max(0, (len(self.gpu_data) - 1) * 140) 
-        window_width = 750 + extra_width
+        # Dynamic Width: Base (Stats) + (GPUs * CardWidth)
+        # Card width = 160 (150 width + 10 padding)
+        extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
+        window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (Budget Alert)")
-        self.geometry(f"{window_width}x640") 
-        self.resizable(True, False)
+        self.title("⚡ Power Monitor (Modern UI)")
+        self.geometry(f"{window_width}x680") 
+        self.configure(fg_color=COLOR_BG)
+        self.resizable(True, True)
 
         # 2. Data Init
         self.running = True
@@ -47,93 +56,126 @@ class PowerMonitorApp(ctk.CTk):
         self.init_csv()
 
         # --- UI LAYOUT ---
-        self.lbl_title = ctk.CTkLabel(self, text="Real-Time Consumption", font=("Roboto", 22, "bold"))
-        self.lbl_title.pack(pady=(20, 5))
-
-        self.lbl_watts = ctk.CTkLabel(self, text="--- W", font=("Roboto", 60, "bold"), text_color="#00E5FF")
-        self.lbl_watts.pack(pady=5)
         
-        # --- HARDWARE COLUMNS ---
-        self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_hw.pack(pady=10, padx=10, fill="x")
+        # A. HEADER SECTION (Total Power)
+        self.frame_header = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_header.pack(pady=(20, 10), fill="x")
+        
+        self.lbl_title = ctk.CTkLabel(self.frame_header, text="SYSTEM POWER DRAW", font=("Roboto Medium", 14), text_color=COLOR_TEXT_SUB)
+        self.lbl_title.pack(pady=(0, 5))
 
-        # A. NVIDIA GPUs
+        self.lbl_watts = ctk.CTkLabel(self.frame_header, text="--- W", font=("Roboto", 72, "bold"), text_color=COLOR_ACCENT)
+        self.lbl_watts.pack(pady=0)
+
+        # B. HARDWARE CARDS ROW
+        self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_hw.pack(pady=20, padx=20, fill="x")
+        
+        # Using a grid layout for cards to keep them centered
+        self.frame_hw.grid_columnconfigure(0, weight=1) # Left spacer
+        col_idx = 1
+        
+        # 1. NVIDIA GPUs
         if self.nvml_active:
             for i, gpu in enumerate(self.gpu_data):
-                short_name = gpu['name'].replace("NVIDIA GeForce ", "").replace("NVIDIA ", "")
+                short_name = gpu['name'].replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").replace(" RTX", "")
                 
-                frame = ctk.CTkFrame(self.frame_hw, width=140)
-                frame.pack(side="left", expand=True, padx=5)
+                # Create Card
+                card = self.create_metric_card(self.frame_hw, short_name, "#76b900")
+                card['frame'].grid(row=0, column=col_idx, padx=10)
                 
-                ctk.CTkLabel(frame, text=short_name, font=("Arial", 11, "bold"), text_color="#76b900").pack(pady=(5,0))
-                lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 20, "bold"))
-                lbl_val.pack(pady=(0, 0))
-                lbl_temp = ctk.CTkLabel(frame, text="-- °C", font=("Arial", 12), text_color="gray")
-                lbl_temp.pack(pady=(0, 10))
-                
-                self.gpu_data[i]['widget_pwr'] = lbl_val
-                self.gpu_data[i]['widget_temp'] = lbl_temp
+                # Store widgets for updates
+                self.gpu_data[i]['widget_pwr'] = card['lbl_val']
+                self.gpu_data[i]['widget_temp'] = card['lbl_temp']
+                col_idx += 1
 
-        # B. AMD iGPU
-        self.frame_igpu = ctk.CTkFrame(self.frame_hw, width=140)
-        self.frame_igpu.pack(side="left", expand=True, padx=5)
-        ctk.CTkLabel(self.frame_igpu, text="iGPU (Radeon)", font=("Arial", 11, "bold"), text_color="#FF3333").pack(pady=(5,0))
-        self.lbl_igpu_val = ctk.CTkLabel(self.frame_igpu, text="0 W", font=("Roboto", 20, "bold"))
-        self.lbl_igpu_val.pack(pady=(0, 0))
-        self.lbl_igpu_temp = ctk.CTkLabel(self.frame_igpu, text="-- °C", font=("Arial", 12), text_color="gray")
-        self.lbl_igpu_temp.pack(pady=(0, 10))
+        # 2. iGPU Card
+        self.card_igpu = self.create_metric_card(self.frame_hw, "iGPU (Radeon)", "#FF3333")
+        self.card_igpu['frame'].grid(row=0, column=col_idx, padx=10)
+        col_idx += 1
 
-        # C. Ryzen CPU
-        self.frame_cpu = ctk.CTkFrame(self.frame_hw, width=140)
-        self.frame_cpu.pack(side="right", expand=True, padx=5)
-        ctk.CTkLabel(self.frame_cpu, text="Ryzen 9900X", font=("Arial", 11, "bold"), text_color="#ff8c00").pack(pady=(5,0))
-        self.lbl_cpu_val = ctk.CTkLabel(self.frame_cpu, text="0 W", font=("Roboto", 20, "bold"))
-        self.lbl_cpu_val.pack(pady=(0, 0))
-        self.lbl_cpu_temp = ctk.CTkLabel(self.frame_cpu, text="-- °C", font=("Arial", 12), text_color="gray")
-        self.lbl_cpu_temp.pack(pady=(0, 10))
+        # 3. CPU Card
+        self.card_cpu = self.create_metric_card(self.frame_hw, "Ryzen 9900X", "#ff8c00")
+        self.card_cpu['frame'].grid(row=0, column=col_idx, padx=10)
+        col_idx += 1
+        
+        self.frame_hw.grid_columnconfigure(col_idx, weight=1) # Right spacer
 
-        # --- STATS GRID ---
-        self.frame_stats = ctk.CTkFrame(self)
-        self.frame_stats.pack(pady=20, padx=20, fill="x")
+
+        # C. STATS PANEL (Bottom)
+        self.frame_stats = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=15)
+        self.frame_stats.pack(pady=20, padx=30, fill="x", ipadx=20, ipady=10)
+
+        # Grid config for stats
+        self.frame_stats.grid_columnconfigure(0, weight=1) # Timeline
+        self.frame_stats.grid_columnconfigure(1, weight=1) # Cost
+        self.frame_stats.grid_columnconfigure(2, weight=1) # Energy
+        self.frame_stats.grid_columnconfigure(3, weight=1) # Time
 
         # Headers
-        ctk.CTkLabel(self.frame_stats, text="TIMELINE", font=("Arial", 12, "bold"), text_color="gray").grid(row=0, column=0, padx=20, pady=10, sticky="w")
-        ctk.CTkLabel(self.frame_stats, text="COST (EGP)", font=("Arial", 12, "bold"), text_color="gray").grid(row=0, column=1, padx=15, pady=10, sticky="e")
-        ctk.CTkLabel(self.frame_stats, text="ENERGY", font=("Arial", 12, "bold"), text_color="gray").grid(row=0, column=2, padx=15, pady=10, sticky="e")
-        ctk.CTkLabel(self.frame_stats, text="DURATION", font=("Arial", 12, "bold"), text_color="gray").grid(row=0, column=3, padx=20, pady=10, sticky="e")
+        h_font = ("Arial", 11, "bold")
+        ctk.CTkLabel(self.frame_stats, text="TIMELINE", font=h_font, text_color=COLOR_TEXT_SUB).grid(row=0, column=0, pady=15, sticky="w")
+        ctk.CTkLabel(self.frame_stats, text="COST (EGP)", font=h_font, text_color=COLOR_TEXT_SUB).grid(row=0, column=1, pady=15, sticky="e")
+        ctk.CTkLabel(self.frame_stats, text="ENERGY", font=h_font, text_color=COLOR_TEXT_SUB).grid(row=0, column=2, pady=15, sticky="e")
+        ctk.CTkLabel(self.frame_stats, text="DURATION", font=h_font, text_color=COLOR_TEXT_SUB).grid(row=0, column=3, pady=15, sticky="e")
 
-        # Rows
-        ctk.CTkLabel(self.frame_stats, text="Session:", font=("Arial", 14)).grid(row=1, column=0, padx=20, pady=5, sticky="w")
-        self.lbl_sess_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00E5FF")
-        self.lbl_sess_cost.grid(row=1, column=1, padx=15, pady=5, sticky="e")
-        self.lbl_sess_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
-        self.lbl_sess_kwh.grid(row=1, column=2, padx=15, pady=5, sticky="e")
-        self.lbl_sess_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color="silver")
-        self.lbl_sess_time.grid(row=1, column=3, padx=20, pady=5, sticky="e")
+        # Row 1: Session
+        self.create_stat_row(1, "Session", COLOR_ACCENT)
+        # Row 2: Today
+        self.create_stat_row(2, "Today", "#00FF00")
+        # Row 3: Overall
+        self.create_stat_row(3, "Overall", "#FFA500")
 
-        ctk.CTkLabel(self.frame_stats, text="Today:", font=("Arial", 14)).grid(row=2, column=0, padx=20, pady=5, sticky="w")
-        self.lbl_day_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#00FF00")
-        self.lbl_day_cost.grid(row=2, column=1, padx=15, pady=5, sticky="e")
-        self.lbl_day_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
-        self.lbl_day_kwh.grid(row=2, column=2, padx=15, pady=5, sticky="e")
-        self.lbl_day_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color="silver")
-        self.lbl_day_time.grid(row=2, column=3, padx=20, pady=5, sticky="e")
-
-        ctk.CTkLabel(self.frame_stats, text="Overall:", font=("Arial", 14)).grid(row=3, column=0, padx=20, pady=5, sticky="w")
-        self.lbl_life_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 18, "bold"), text_color="#FFA500")
-        self.lbl_life_cost.grid(row=3, column=1, padx=15, pady=5, sticky="e")
-        self.lbl_life_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12))
-        self.lbl_life_kwh.grid(row=3, column=2, padx=15, pady=5, sticky="e")
-        self.lbl_life_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color="silver")
-        self.lbl_life_time.grid(row=3, column=3, padx=20, pady=5, sticky="e")
-
+        # Footer Status
         self.lbl_status = ctk.CTkLabel(self, text="Initializing...", text_color="gray", font=("Arial", 11))
-        self.lbl_status.pack(side="bottom", pady=10)
+        self.lbl_status.pack(side="bottom", pady=15)
 
+        # Thread Start
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
         self.monitor_thread.start()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    def create_metric_card(self, parent, title, title_color):
+        """Helper to build a unified hardware card"""
+        frame = ctk.CTkFrame(parent, width=150, height=130, fg_color=COLOR_CARD, corner_radius=12)
+        frame.pack_propagate(False) # Force fixed size
+        
+        # Title
+        ctk.CTkLabel(frame, text=title, font=("Arial", 12, "bold"), text_color=title_color).pack(pady=(15, 5))
+        
+        # Value (Big)
+        lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 28, "bold"), text_color=COLOR_TEXT_MAIN)
+        lbl_val.pack(pady=(0, 0))
+        
+        # Temp (Small)
+        lbl_temp = ctk.CTkLabel(frame, text="-- °C", font=("Arial", 13), text_color=COLOR_TEXT_SUB)
+        lbl_temp.pack(pady=(5, 10))
+        
+        return {"frame": frame, "lbl_val": lbl_val, "lbl_temp": lbl_temp}
+
+    def create_stat_row(self, row_idx, label_text, color):
+        """Helper to create a row in the stats table"""
+        # Timeline Label
+        ctk.CTkLabel(self.frame_stats, text=f"{label_text}:", font=("Arial", 14), text_color=COLOR_TEXT_MAIN).grid(row=row_idx, column=0, pady=8, sticky="w")
+        
+        # Cost
+        lbl_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 16, "bold"), text_color=color)
+        lbl_cost.grid(row=row_idx, column=1, pady=8, sticky="e")
+        
+        # Energy
+        lbl_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 13), text_color=COLOR_TEXT_MAIN)
+        lbl_kwh.grid(row=row_idx, column=2, pady=8, sticky="e")
+        
+        # Time
+        lbl_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 13), text_color=COLOR_TEXT_SUB)
+        lbl_time.grid(row=row_idx, column=3, pady=8, sticky="e")
+        
+        # Save references
+        setattr(self, f"lbl_{label_text.lower()}_cost", lbl_cost)
+        setattr(self, f"lbl_{label_text.lower()}_kwh", lbl_kwh)
+        setattr(self, f"lbl_{label_text.lower()}_time", lbl_time)
+
+    # --- LOGIC METHODS ---
     def setup_nvml(self):
         try:
             pynvml.nvmlInit()
@@ -166,38 +208,27 @@ class PowerMonitorApp(ctk.CTk):
     def init_csv(self):
         if not os.path.exists(LOG_FILE):
             headers = ["Timestamp", "Total Watts", "Total Cost (Daily)", "CPU Temp", "CPU Watts", "iGPU Temp", "iGPU Watts"]
-            for i in range(len(self.gpu_data)):
-                headers.extend([f"GPU{i} Temp", f"GPU{i} Watts"])
-            with open(LOG_FILE, mode='w', newline='') as f:
-                csv.writer(f).writerow(headers)
+            for i in range(len(self.gpu_data)): headers.extend([f"GPU{i} Temp", f"GPU{i} Watts"])
+            with open(LOG_FILE, mode='w', newline='') as f: csv.writer(f).writerow(headers)
 
     def log_to_csv(self, total_w, cpu_t, cpu_w, igpu_t, igpu_w, nv_metrics):
         try:
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            row = [
-                now_str, f"{total_w:.1f}", f"{self.persistent_data['day_cost']:.4f}",
-                f"{cpu_t:.1f}", f"{cpu_w:.1f}", f"{igpu_t:.1f}", f"{igpu_w:.1f}"
-            ]
-            for metric in nv_metrics:
-                row.extend([f"{metric['temp']:.1f}", f"{metric['power']:.1f}"])
-            with open(LOG_FILE, mode='a', newline='') as f:
-                csv.writer(f).writerow(row)
+            row = [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"{total_w:.1f}", f"{self.persistent_data['day_cost']:.4f}", f"{cpu_t:.1f}", f"{cpu_w:.1f}", f"{igpu_t:.1f}", f"{igpu_w:.1f}"]
+            for metric in nv_metrics: row.extend([f"{metric['temp']:.1f}", f"{metric['power']:.1f}"])
+            with open(LOG_FILE, mode='a', newline='') as f: csv.writer(f).writerow(row)
         except: pass
 
     def fetch_lhm_data(self):
         try:
-            response = requests.get(LHM_URL, timeout=0.2)
-            if response.status_code == 200: return response.json()
+            r = requests.get(LHM_URL, timeout=0.2)
+            if r.status_code == 200: return r.json()
         except: return None
-        return None
 
     def find_sensor_value(self, node, target_names, sensor_type="Power"):
         if isinstance(node, dict):
-            if node.get("Type") == sensor_type:
-                if any(name.lower() in node.get("Text", "").lower() for name in target_names):
-                    val_str = str(node.get("Value", "0")).split()[0]
-                    try: return float(val_str)
-                    except: return 0.0
+            if node.get("Type") == sensor_type and any(name.lower() in node.get("Text", "").lower() for name in target_names):
+                try: return float(str(node.get("Value", "0")).split()[0])
+                except: return 0.0
             if "Children" in node:
                 for child in node["Children"]:
                     res = self.find_sensor_value(child, target_names, sensor_type)
@@ -230,11 +261,9 @@ class PowerMonitorApp(ctk.CTk):
         acc = 0.0
         if "Children" in node:
             for child in node["Children"]:
-                if child.get("Type") == "Power":
-                    name = child.get("Text", "")
-                    if name in ["GPU Core", "GPU SoC", "GPU Power"]:
-                        try: acc += float(str(child.get("Value", "0")).split()[0])
-                        except: pass
+                if child.get("Type") == "Power" and child.get("Text", "") in ["GPU Core", "GPU SoC", "GPU Power"]:
+                    try: acc += float(str(child.get("Value", "0")).split()[0])
+                    except: pass
                 acc += self.sum_radeon_powers(child)
         return acc
 
@@ -250,12 +279,11 @@ class PowerMonitorApp(ctk.CTk):
 
     def background_monitor(self):
         last_log = time.time()
-        
         while self.running:
             total_nvidia_w = 0
             nv_metrics = [] 
             
-            # 1. Update NVIDIA GPUs
+            # NVIDIA Logic
             if self.nvml_active:
                 for gpu in self.gpu_data:
                     try: 
@@ -266,33 +294,30 @@ class PowerMonitorApp(ctk.CTk):
                         if gpu['widget_pwr']:
                             gpu['widget_pwr'].configure(text=f"{int(w)} W")
                             gpu['widget_temp'].configure(text=f"{t} °C", text_color=self.get_color(t))
-                    except: 
-                        nv_metrics.append({"power": 0, "temp": 0})
+                    except: nv_metrics.append({"power": 0, "temp": 0})
 
-            lhm_data = self.fetch_lhm_data()
-            cpu_w, igpu_w = 0, 0
-            cpu_t, igpu_t = 0, 0
+            # LHM Logic
+            lhm = self.fetch_lhm_data()
+            cpu_w, igpu_w, cpu_t, igpu_t = 0, 0, 0, 0
             is_estimated = False
-            status_msg = "Live Data"
+            status_msg = "Status: Live Data"
 
-            if lhm_data:
-                cpu_w = self.find_sensor_value(lhm_data, ["Package", "CPU Package"], "Power")
-                igpu_w = self.calculate_igpu_total(lhm_data)
-                cpu_t = self.find_sensor_value(lhm_data, ["Core (Tctl/Tdie)", "Package", "Core #1"], "Temperature")
-                igpu_t = self.find_sensor_value(lhm_data, ["GPU Core", "GPU Temperature"], "Temperature")
+            if lhm:
+                cpu_w = self.find_sensor_value(lhm, ["Package", "CPU Package"], "Power")
+                igpu_w = self.calculate_igpu_total(lhm)
+                cpu_t = self.find_sensor_value(lhm, ["Core (Tctl/Tdie)", "Package", "Core #1"], "Temperature")
+                igpu_t = self.find_sensor_value(lhm, ["GPU Core", "GPU Temperature"], "Temperature")
                 if cpu_w == 0: is_estimated = True
             else:
                 is_estimated = True
-                status_msg = "Estimating (LHM Off)"
+                status_msg = "Status: Estimating (LHM Off)"
                 if not self.nvml_active: cpu_w = 55 
             
-            # 2. Totals
-            overhead = 55 
-            total_w = total_nvidia_w + igpu_w + cpu_w + overhead
-
-            # 3. Stats Logic
+            # Totals
+            total_w = total_nvidia_w + igpu_w + cpu_w + 55 # Overhead
             kwh_inc = (total_w * 1.0) / 3_600_000
             cost_inc = kwh_inc * PRICE_PER_KWH
+            
             self.session_data["kwh"] += kwh_inc
             self.session_data["cost"] += cost_inc
             self.persistent_data["day_kwh"] += kwh_inc
@@ -303,57 +328,44 @@ class PowerMonitorApp(ctk.CTk):
             self.persistent_data["lifetime_seconds"] += 1
 
             # Day Reset
-            current_date = datetime.now().strftime("%Y-%m-%d")
-            if current_date != self.persistent_data["last_date"]:
-                self.persistent_data["last_date"] = current_date
-                self.persistent_data["day_kwh"] = 0.0
-                self.persistent_data["day_cost"] = 0.0
-                self.persistent_data["day_seconds"] = 0
+            if datetime.now().strftime("%Y-%m-%d") != self.persistent_data["last_date"]:
+                self.persistent_data.update({"last_date": datetime.now().strftime("%Y-%m-%d"), "day_kwh": 0.0, "day_cost": 0.0, "day_seconds": 0})
 
-            # 4. GUI Update
+            # UI Update
             try:
-                self.lbl_sess_time.configure(text=self.format_time(time.time() - self.start_time))
-                self.lbl_day_time.configure(text=self.format_time(self.persistent_data["day_seconds"]))
-                self.lbl_life_time.configure(text=self.format_time(self.persistent_data["lifetime_seconds"]))
-
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
-                self.lbl_igpu_val.configure(text=f"{int(igpu_w)} W")
-                self.lbl_cpu_val.configure(text=f"{int(cpu_w)} W")
-                
-                self.lbl_igpu_temp.configure(text=f"{int(igpu_t)} °C", text_color=self.get_color(igpu_t))
-                self.lbl_cpu_temp.configure(text=f"{int(cpu_t)} °C", text_color=self.get_color(cpu_t))
-
                 if total_w > 500: self.lbl_watts.configure(text_color="#FF4444")
                 elif total_w > 300: self.lbl_watts.configure(text_color="#FFD700")
-                else: self.lbl_watts.configure(text_color="#00E5FF")
-                
-                color_state = "gray" if is_estimated else "#ff8c00"
-                self.lbl_cpu_val.configure(text_color=color_state)
+                else: self.lbl_watts.configure(text_color=COLOR_ACCENT)
 
-                self.lbl_sess_cost.configure(text=f"{self.session_data['cost']:.4f}")
-                self.lbl_sess_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
-                self.lbl_day_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
-                self.lbl_day_kwh.configure(text=f"{self.persistent_data['day_kwh']:.4f} kWh")
-                self.lbl_life_cost.configure(text=f"{self.persistent_data['lifetime_cost']:.4f}")
-                self.lbl_life_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
+                self.card_igpu['lbl_val'].configure(text=f"{int(igpu_w)} W")
+                self.card_igpu['lbl_temp'].configure(text=f"{int(igpu_t)} °C", text_color=self.get_color(igpu_t))
                 
-                # --- BUDGET ALERT CHECK ---
+                self.card_cpu['lbl_val'].configure(text=f"{int(cpu_w)} W", text_color="gray" if is_estimated else COLOR_TEXT_MAIN)
+                self.card_cpu['lbl_temp'].configure(text=f"{int(cpu_t)} °C", text_color=self.get_color(cpu_t))
+
+                # Update Stats Rows
+                self.lbl_session_time.configure(text=self.format_time(time.time() - self.start_time))
+                self.lbl_session_cost.configure(text=f"{self.session_data['cost']:.4f}")
+                self.lbl_session_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
+                
+                self.lbl_today_time.configure(text=self.format_time(self.persistent_data["day_seconds"]))
+                self.lbl_today_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
+                self.lbl_today_kwh.configure(text=f"{self.persistent_data['day_kwh']:.4f} kWh")
+                
+                self.lbl_overall_time.configure(text=self.format_time(self.persistent_data["lifetime_seconds"]))
+                self.lbl_overall_cost.configure(text=f"{self.persistent_data['lifetime_cost']:.4f}")
+                self.lbl_overall_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
+
+                # Budget Alert
                 if self.persistent_data["day_cost"] > DAILY_LIMIT_EGP:
-                    # Cost -> RED
-                    self.lbl_day_cost.configure(text_color="#FF4444")
-                    # Flashing Status Msg
-                    if int(time.time()) % 2 == 0:
-                        self.lbl_status.configure(text="⚠️ DAILY BUDGET EXCEEDED ⚠️", text_color="#FF4444")
-                    else:
-                        self.lbl_status.configure(text=f"Limit: {DAILY_LIMIT_EGP:.2f} EGP", text_color="#FF4444")
+                    self.lbl_today_cost.configure(text_color="#FF4444")
+                    self.lbl_status.configure(text="⚠️ DAILY BUDGET EXCEEDED ⚠️" if int(time.time())%2==0 else f"Limit: {DAILY_LIMIT_EGP} EGP", text_color="#FF4444")
                 else:
-                    # Normal State
-                    self.lbl_day_cost.configure(text_color="#00FF00")
+                    self.lbl_today_cost.configure(text_color="#00FF00")
                     self.lbl_status.configure(text=status_msg, text_color="gray")
-
             except: pass
 
-            # 5. Save & Log
             if time.time() - last_log > 60:
                 self.save_data()
                 self.log_to_csv(total_w, cpu_t, cpu_w, igpu_t, igpu_w, nv_metrics)
