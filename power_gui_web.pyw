@@ -7,6 +7,14 @@ import csv
 import pynvml
 import requests
 from datetime import datetime
+from collections import deque # For storing graph history
+
+# --- MATPLOTLIB SETUP ---
+import matplotlib
+matplotlib.use("TkAgg")
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
 
 # --- CONFIGURATION ---
 PRICE_PER_KWH = 2.14          
@@ -24,14 +32,12 @@ COLOR_ACCENT = "#00E5FF"    # Cyan
 COLOR_WARN = "#FFD700"      # Gold
 COLOR_CRIT = "#FF4444"      # Red
 
-# --- ESTIMATED TDP (For Progress Bars) ---
-# Adjust these if you want the bars to fill differently
-TDP_NVIDIA_HIGH = 285 # RTX 4070 Ti estimate
-TDP_NVIDIA_MID = 120  # GTX 1660 Ti estimate
-TDP_CPU = 170         # Ryzen 9900X PPT
-TDP_IGPU = 60         # iGPU estimate
+# --- ESTIMATED TDP ---
+TDP_NVIDIA_HIGH = 285 
+TDP_NVIDIA_MID = 120  
+TDP_CPU = 170         
+TDP_IGPU = 60         
 
-# --- SYSTEM SETUP ---
 os.environ["PATH"] += os.pathsep + os.getcwd()
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -45,27 +51,35 @@ class PowerMonitorApp(ctk.CTk):
         self.nvml_active = False
         self.setup_nvml()
         
-        # Window Calculation
+        # Window Calculation (Taller for Graph)
         extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
         window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (Visualizer)")
-        self.geometry(f"{window_width}x660") # Slightly shorter (Compact)
+        self.title("⚡ Power Monitor (Live Graph)")
+        self.geometry(f"{window_width}x850") # Taller to fit graph
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
         # 2. Data Init
         self.running = True
         self.start_time = time.time()
-        self.peak_w = 0 # Track max spike
+        self.peak_w = 0 
         self.session_data = {"kwh": 0.0, "cost": 0.0}
         self.persistent_data = self.load_data()
+        
+        # Graph Data (Last 60 seconds)
+        self.history_x = deque(maxlen=60)
+        self.history_y = deque(maxlen=60)
+        for i in range(60): 
+            self.history_x.append(i)
+            self.history_y.append(0)
+
         self.save_data()
         self.init_csv()
 
         # --- UI LAYOUT ---
         
-        # A. HEADER (Total + Peak)
+        # A. HEADER
         self.frame_header = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_header.pack(pady=(15, 5), fill="x")
         
@@ -78,19 +92,15 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_peak = ctk.CTkLabel(self.frame_header, text="Peak: 0 W", font=("Arial", 11), text_color="gray")
         self.lbl_peak.pack(pady=(0, 0))
 
-        # B. HARDWARE CARDS (Grid)
+        # B. HARDWARE CARDS
         self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_hw.pack(pady=15, padx=20, fill="x")
-        
+        self.frame_hw.pack(pady=10, padx=20, fill="x")
         self.frame_hw.grid_columnconfigure(0, weight=1)
         col_idx = 1
         
-        # 1. NVIDIA GPUs
         if self.nvml_active:
             for i, gpu in enumerate(self.gpu_data):
                 short_name = gpu['name'].replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").replace(" RTX", "")
-                
-                # Guess TDP for bar scaling (High end vs Mid range)
                 est_max = TDP_NVIDIA_HIGH if "4070" in short_name or "3080" in short_name else TDP_NVIDIA_MID
                 
                 card = self.create_metric_card(self.frame_hw, short_name, "#76b900", est_max)
@@ -102,19 +112,21 @@ class PowerMonitorApp(ctk.CTk):
                 self.gpu_data[i]['max_w'] = est_max
                 col_idx += 1
 
-        # 2. iGPU (Purple title)
         self.card_igpu = self.create_metric_card(self.frame_hw, "iGPU (Radeon)", "#E040FB", TDP_IGPU)
         self.card_igpu['frame'].grid(row=0, column=col_idx, padx=8)
         col_idx += 1
 
-        # 3. CPU
         self.card_cpu = self.create_metric_card(self.frame_hw, "Ryzen 9900X", "#ff8c00", TDP_CPU)
         self.card_cpu['frame'].grid(row=0, column=col_idx, padx=8)
         col_idx += 1
-        
         self.frame_hw.grid_columnconfigure(col_idx, weight=1)
 
-        # C. STATS PANEL
+        # C. LIVE CHART (NEW)
+        self.frame_chart = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=12, height=200)
+        self.frame_chart.pack(pady=10, padx=25, fill="x")
+        self.setup_chart()
+
+        # D. STATS PANEL
         self.frame_stats = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=12)
         self.frame_stats.pack(pady=10, padx=25, fill="x", ipadx=15, ipady=5)
 
@@ -123,19 +135,16 @@ class PowerMonitorApp(ctk.CTk):
         self.frame_stats.grid_columnconfigure(2, weight=1)
         self.frame_stats.grid_columnconfigure(3, weight=1)
 
-        # Headers
         h_font = ("Arial", 10, "bold")
         ctk.CTkLabel(self.frame_stats, text="TIMELINE", font=h_font, text_color=COLOR_TEXT_SUB).grid(row=0, column=0, pady=10, sticky="w")
         ctk.CTkLabel(self.frame_stats, text="COST (EGP)", font=h_font, text_color=COLOR_TEXT_SUB).grid(row=0, column=1, pady=10, sticky="e")
         ctk.CTkLabel(self.frame_stats, text="ENERGY", font=h_font, text_color=COLOR_TEXT_SUB).grid(row=0, column=2, pady=10, sticky="e")
         ctk.CTkLabel(self.frame_stats, text="DURATION", font=h_font, text_color=COLOR_TEXT_SUB).grid(row=0, column=3, pady=10, sticky="e")
 
-        # Rows
         self.create_stat_row(1, "Session", COLOR_ACCENT)
         self.create_stat_row(2, "Today", "#00FF00")
         self.create_stat_row(3, "Overall", "#FFA500")
 
-        # Footer
         self.lbl_status = ctk.CTkLabel(self, text="Initializing...", text_color="gray", font=("Arial", 10))
         self.lbl_status.pack(side="bottom", pady=10)
 
@@ -144,41 +153,64 @@ class PowerMonitorApp(ctk.CTk):
         self.monitor_thread.start()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    def setup_chart(self):
+        # Create Figure
+        self.fig = Figure(figsize=(5, 2), dpi=100)
+        self.fig.patch.set_facecolor(COLOR_CARD) # Match Card BG
+        
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_facecolor(COLOR_CARD)
+        
+        # Style
+        self.line, = self.ax.plot([], [], color=COLOR_ACCENT, linewidth=2)
+        self.ax.grid(True, color="#404040", linestyle='--', linewidth=0.5)
+        
+        # Remove borders
+        self.ax.spines['top'].set_visible(False)
+        self.ax.spines['right'].set_visible(False)
+        self.ax.spines['bottom'].set_color('#404040')
+        self.ax.spines['left'].set_color('#404040')
+        self.ax.tick_params(axis='x', colors='gray', labelsize=8)
+        self.ax.tick_params(axis='y', colors='gray', labelsize=8)
+        
+        # Embed in Tkinter
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_chart)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
+
+    def update_chart_data(self, new_val):
+        self.history_y.append(new_val)
+        
+        # Update Line
+        self.line.set_data(self.history_x, self.history_y)
+        
+        # Rescale Axis
+        self.ax.set_ylim(0, max(max(self.history_y) * 1.2, 100)) # 20% headroom
+        self.ax.set_xlim(0, 60)
+        
+        self.canvas.draw()
+
     def create_metric_card(self, parent, title, title_color, max_val_estimate):
-        """Creates card with Title, Value, Progress Bar, Temp"""
         frame = ctk.CTkFrame(parent, width=155, height=140, fg_color=COLOR_CARD, corner_radius=10)
         frame.pack_propagate(False)
-        
-        # Title
         ctk.CTkLabel(frame, text=title, font=("Arial", 11, "bold"), text_color=title_color).pack(pady=(12, 2))
-        
-        # Value
         lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 24, "bold"), text_color=COLOR_TEXT_MAIN)
         lbl_val.pack(pady=0)
-        
-        # Progress Bar (Visual Load)
         bar = ctk.CTkProgressBar(frame, width=100, height=6, progress_color=title_color)
         bar.set(0)
         bar.pack(pady=(5, 5))
-        
-        # Temp
         lbl_temp = ctk.CTkLabel(frame, text="-- °C", font=("Arial", 12), text_color=COLOR_TEXT_SUB)
         lbl_temp.pack(pady=(0, 10))
-        
         return {"frame": frame, "lbl_val": lbl_val, "lbl_temp": lbl_temp, "bar": bar, "max": max_val_estimate}
 
     def create_stat_row(self, row_idx, label_text, color):
         ctk.CTkLabel(self.frame_stats, text=f"{label_text}:", font=("Arial", 13), text_color=COLOR_TEXT_MAIN).grid(row=row_idx, column=0, pady=5, sticky="w")
-        
         lbl_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 15, "bold"), text_color=color)
         lbl_cost.grid(row=row_idx, column=1, pady=5, sticky="e")
-        
         lbl_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12), text_color=COLOR_TEXT_MAIN)
         lbl_kwh.grid(row=row_idx, column=2, pady=5, sticky="e")
-        
         lbl_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color=COLOR_TEXT_SUB)
         lbl_time.grid(row=row_idx, column=3, pady=5, sticky="e")
-        
         setattr(self, f"lbl_{label_text.lower()}_cost", lbl_cost)
         setattr(self, f"lbl_{label_text.lower()}_kwh", lbl_kwh)
         setattr(self, f"lbl_{label_text.lower()}_time", lbl_time)
@@ -285,18 +317,6 @@ class PowerMonitorApp(ctk.CTk):
         h, m = divmod(m, 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
 
-    def update_card_visuals(self, widget_dict, power, temp, max_ref):
-        """Updates text and progress bar"""
-        try:
-            # Text
-            widget_dict['lbl_val'].configure(text=f"{int(power)} W")
-            widget_dict['lbl_temp'].configure(text=f"{int(temp)} °C", text_color=self.get_color(temp))
-            
-            # Bar (0.0 to 1.0)
-            ratio = min(1.0, power / max_ref)
-            widget_dict['bar'].set(ratio)
-        except: pass
-
     def background_monitor(self):
         last_log = time.time()
         while self.running:
@@ -313,7 +333,6 @@ class PowerMonitorApp(ctk.CTk):
                         nv_metrics.append({"power": w, "temp": t})
                         
                         if gpu['widget_pwr']:
-                            # Update with bar logic
                             ratio = min(1.0, w / gpu['max_w'])
                             gpu['widget_pwr'].configure(text=f"{int(w)} W")
                             gpu['widget_temp'].configure(text=f"{t} °C", text_color=self.get_color(t))
@@ -337,10 +356,7 @@ class PowerMonitorApp(ctk.CTk):
                 status_msg = "Status: Estimating (LHM Off)"
                 if not self.nvml_active: cpu_w = 55 
             
-            # Totals
             total_w = total_nvidia_w + igpu_w + cpu_w + 55
-            
-            # Peak Tracker
             if total_w > self.peak_w: self.peak_w = total_w
 
             # Stats logic
@@ -360,6 +376,8 @@ class PowerMonitorApp(ctk.CTk):
 
             # UI Update
             try:
+                self.update_chart_data(total_w) # <--- UPDATE CHART
+                
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
                 self.lbl_peak.configure(text=f"Peak: {int(self.peak_w)} W")
                 
@@ -367,12 +385,16 @@ class PowerMonitorApp(ctk.CTk):
                 elif total_w > 300: self.lbl_watts.configure(text_color=COLOR_WARN)
                 else: self.lbl_watts.configure(text_color=COLOR_ACCENT)
 
-                # Update Manual Cards (iGPU + CPU)
-                self.update_card_visuals(self.card_igpu, igpu_w, igpu_t, TDP_IGPU)
-                self.update_card_visuals(self.card_cpu, cpu_w, cpu_t, TDP_CPU)
-                self.card_cpu['lbl_val'].configure(text_color="gray" if is_estimated else COLOR_TEXT_MAIN)
+                self.card_igpu['lbl_val'].configure(text=f"{int(igpu_w)} W")
+                self.card_igpu['lbl_temp'].configure(text=f"{int(igpu_t)} °C", text_color=self.get_color(igpu_t))
+                ratio_igpu = min(1.0, igpu_w / TDP_IGPU)
+                self.card_igpu['bar'].set(ratio_igpu)
+                
+                self.card_cpu['lbl_val'].configure(text=f"{int(cpu_w)} W", text_color="gray" if is_estimated else COLOR_TEXT_MAIN)
+                self.card_cpu['lbl_temp'].configure(text=f"{int(cpu_t)} °C", text_color=self.get_color(cpu_t))
+                ratio_cpu = min(1.0, cpu_w / TDP_CPU)
+                self.card_cpu['bar'].set(ratio_cpu)
 
-                # Stats Text
                 self.lbl_session_time.configure(text=self.format_time(time.time() - self.start_time))
                 self.lbl_session_cost.configure(text=f"{self.session_data['cost']:.4f}")
                 self.lbl_session_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
