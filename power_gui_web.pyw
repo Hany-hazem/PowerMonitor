@@ -4,17 +4,21 @@ import time
 import json
 import os
 import csv
+import socket
 import pynvml
 import requests
 from datetime import datetime
-from collections import deque # For storing graph history
+from collections import deque
 
-# --- MATPLOTLIB SETUP ---
+# --- FLASK (WEB SERVER) ---
+from flask import Flask, jsonify, render_template_string
+import logging
+
+# --- MATPLOTLIB ---
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.pyplot as plt
 
 # --- CONFIGURATION ---
 PRICE_PER_KWH = 2.14          
@@ -22,15 +26,28 @@ DAILY_LIMIT_EGP = 10.00
 STATE_FILE = "power_state.json"
 LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
+FLASK_PORT = 5000
+
+# --- SHARED DATA (Bridge between GUI and Phone) ---
+# This dictionary holds the live data that the phone will fetch.
+SHARED_DATA = {
+    "total_w": 0, "peak_w": 0,
+    "cpu_w": 0, "cpu_t": 0,
+    "igpu_w": 0, "igpu_t": 0,
+    "gpu_data": [], # List of {name, power, temp}
+    "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0,
+    "time_session": "00:00:00",
+    "alert": False
+}
 
 # --- THEME COLORS ---
 COLOR_BG = "#1a1a1a"
 COLOR_CARD = "#2b2b2b"
 COLOR_TEXT_MAIN = "#ffffff"
 COLOR_TEXT_SUB = "#a0a0a0"
-COLOR_ACCENT = "#00E5FF"    # Cyan
-COLOR_WARN = "#FFD700"      # Gold
-COLOR_CRIT = "#FF4444"      # Red
+COLOR_ACCENT = "#00E5FF"    
+COLOR_WARN = "#FFD700"      
+COLOR_CRIT = "#FF4444"      
 
 # --- ESTIMATED TDP ---
 TDP_NVIDIA_HIGH = 285 
@@ -42,6 +59,10 @@ os.environ["PATH"] += os.pathsep + os.getcwd()
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
+# Disable Flask Logging (Keep console clean)
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
+
 class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -51,12 +72,12 @@ class PowerMonitorApp(ctk.CTk):
         self.nvml_active = False
         self.setup_nvml()
         
-        # Window Calculation (Taller for Graph)
+        # Window Calculation
         extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
         window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (Live Graph)")
-        self.geometry(f"{window_width}x850") # Taller to fit graph
+        self.title("⚡ Power Monitor (Remote Server)")
+        self.geometry(f"{window_width}x880") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
@@ -67,7 +88,7 @@ class PowerMonitorApp(ctk.CTk):
         self.session_data = {"kwh": 0.0, "cost": 0.0}
         self.persistent_data = self.load_data()
         
-        # Graph Data (Last 60 seconds)
+        # Graph Data
         self.history_x = deque(maxlen=60)
         self.history_y = deque(maxlen=60)
         for i in range(60): 
@@ -121,7 +142,7 @@ class PowerMonitorApp(ctk.CTk):
         col_idx += 1
         self.frame_hw.grid_columnconfigure(col_idx, weight=1)
 
-        # C. LIVE CHART (NEW)
+        # C. LIVE CHART
         self.frame_chart = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=12, height=200)
         self.frame_chart.pack(pady=10, padx=25, fill="x")
         self.setup_chart()
@@ -129,7 +150,6 @@ class PowerMonitorApp(ctk.CTk):
         # D. STATS PANEL
         self.frame_stats = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=12)
         self.frame_stats.pack(pady=10, padx=25, fill="x", ipadx=15, ipady=5)
-
         self.frame_stats.grid_columnconfigure(0, weight=1)
         self.frame_stats.grid_columnconfigure(1, weight=1)
         self.frame_stats.grid_columnconfigure(2, weight=1)
@@ -145,49 +165,57 @@ class PowerMonitorApp(ctk.CTk):
         self.create_stat_row(2, "Today", "#00FF00")
         self.create_stat_row(3, "Overall", "#FFA500")
 
-        self.lbl_status = ctk.CTkLabel(self, text="Initializing...", text_color="gray", font=("Arial", 10))
-        self.lbl_status.pack(side="bottom", pady=10)
+        # E. FOOTER (Status + Remote Link)
+        self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_footer.pack(side="bottom", pady=10, fill="x")
+        
+        # Get Local IP
+        try:
+            hostname = socket.gethostname()
+            local_ip = socket.gethostbyname(hostname)
+            remote_url = f"http://{local_ip}:{FLASK_PORT}"
+        except:
+            remote_url = "Unknown"
 
-        # Thread
+        self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
+        self.lbl_status.pack()
+        
+        self.lbl_remote = ctk.CTkLabel(self.frame_footer, text=f"📱 Remote View: {remote_url}", text_color=COLOR_ACCENT, font=("Arial", 12, "bold"), cursor="hand2")
+        self.lbl_remote.pack(pady=(2, 0))
+
+        # F. THREADS
+        # 1. Monitoring Thread
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
         self.monitor_thread.start()
+        
+        # 2. Flask Thread
+        self.flask_thread = threading.Thread(target=self.run_flask_server, daemon=True)
+        self.flask_thread.start()
+        
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_chart(self):
-        # Create Figure
         self.fig = Figure(figsize=(5, 2), dpi=100)
-        self.fig.patch.set_facecolor(COLOR_CARD) # Match Card BG
-        
+        self.fig.patch.set_facecolor(COLOR_CARD)
         self.ax = self.fig.add_subplot(111)
         self.ax.set_facecolor(COLOR_CARD)
-        
-        # Style
         self.line, = self.ax.plot([], [], color=COLOR_ACCENT, linewidth=2)
         self.ax.grid(True, color="#404040", linestyle='--', linewidth=0.5)
-        
-        # Remove borders
         self.ax.spines['top'].set_visible(False)
         self.ax.spines['right'].set_visible(False)
         self.ax.spines['bottom'].set_color('#404040')
         self.ax.spines['left'].set_color('#404040')
         self.ax.tick_params(axis='x', colors='gray', labelsize=8)
         self.ax.tick_params(axis='y', colors='gray', labelsize=8)
-        
-        # Embed in Tkinter
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_chart)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
 
     def update_chart_data(self, new_val):
         self.history_y.append(new_val)
-        
-        # Update Line
         self.line.set_data(self.history_x, self.history_y)
-        
-        # Rescale Axis
-        self.ax.set_ylim(0, max(max(self.history_y) * 1.2, 100)) # 20% headroom
+        self.ax.set_ylim(0, max(max(self.history_y) * 1.2, 100))
         self.ax.set_xlim(0, 60)
-        
         self.canvas.draw()
 
     def create_metric_card(self, parent, title, title_color, max_val_estimate):
@@ -215,16 +243,138 @@ class PowerMonitorApp(ctk.CTk):
         setattr(self, f"lbl_{label_text.lower()}_kwh", lbl_kwh)
         setattr(self, f"lbl_{label_text.lower()}_time", lbl_time)
 
-    # --- LOGIC ---
+    # --- FLASK SERVER ---
+    def run_flask_server(self):
+        app = Flask(__name__)
+
+        @app.route('/')
+        def index():
+            # Mobile-optimized HTML
+            return render_template_string("""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>Power Monitor</title>
+                <style>
+                    body { background-color: #1a1a1a; color: white; font-family: 'Segoe UI', sans-serif; text-align: center; padding: 20px; }
+                    h1 { margin-bottom: 5px; color: #a0a0a0; font-size: 16px; }
+                    .watts { font-size: 60px; font-weight: bold; color: #00E5FF; margin: 0; }
+                    .peak { color: gray; font-size: 14px; margin-bottom: 20px; }
+                    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+                    .card { background: #2b2b2b; padding: 15px; border-radius: 10px; }
+                    .card-title { font-size: 12px; font-weight: bold; margin-bottom: 5px; display: block; }
+                    .card-val { font-size: 22px; font-weight: bold; }
+                    .card-temp { font-size: 12px; color: #a0a0a0; }
+                    .stats { background: #2b2b2b; border-radius: 10px; padding: 15px; text-align: left; }
+                    .row { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #404040; padding-bottom: 5px; }
+                    .row:last-child { border: none; margin: 0; }
+                    .label { font-size: 14px; }
+                    .cost { font-size: 16px; font-weight: bold; }
+                    .alert { color: #FF4444 !important; }
+                </style>
+            </head>
+            <body>
+                <h1>SYSTEM POWER DRAW</h1>
+                <div id="total_w" class="watts">--- W</div>
+                <div id="peak_w" class="peak">Peak: --- W</div>
+
+                <div class="grid" id="gpu_grid">
+                    </div>
+
+                <div class="grid">
+                     <div class="card">
+                        <span class="card-title" style="color:#E040FB">iGPU (Radeon)</span>
+                        <div id="igpu_w" class="card-val">0 W</div>
+                        <div id="igpu_t" class="card-temp">-- °C</div>
+                    </div>
+                    <div class="card">
+                        <span class="card-title" style="color:#ff8c00">Ryzen 9900X</span>
+                        <div id="cpu_w" class="card-val">0 W</div>
+                        <div id="cpu_t" class="card-temp">-- °C</div>
+                    </div>
+                </div>
+
+                <div class="stats">
+                    <div class="row">
+                        <span class="label">Session</span>
+                        <span id="cost_session" class="cost" style="color:#00E5FF">0.00 EGP</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Today</span>
+                        <span id="cost_today" class="cost" style="color:#00FF00">0.00 EGP</span>
+                    </div>
+                    <div class="row">
+                        <span class="label">Overall</span>
+                        <span id="cost_overall" class="cost" style="color:#FFA500">0.00 EGP</span>
+                    </div>
+                </div>
+
+                <script>
+                    async function update() {
+                        try {
+                            const res = await fetch('/api/data');
+                            const data = await res.json();
+                            
+                            document.getElementById('total_w').innerText = Math.round(data.total_w) + " W";
+                            document.getElementById('total_w').style.color = data.total_w > 500 ? "#FF4444" : (data.total_w > 300 ? "#FFD700" : "#00E5FF");
+                            document.getElementById('peak_w').innerText = "Peak: " + Math.round(data.peak_w) + " W";
+                            
+                            document.getElementById('cpu_w').innerText = Math.round(data.cpu_w) + " W";
+                            document.getElementById('cpu_t').innerText = Math.round(data.cpu_t) + " °C";
+                            
+                            document.getElementById('igpu_w').innerText = Math.round(data.igpu_w) + " W";
+                            document.getElementById('igpu_t').innerText = Math.round(data.igpu_t) + " °C";
+
+                            document.getElementById('cost_session').innerText = data.cost_session.toFixed(4) + " EGP";
+                            document.getElementById('cost_today').innerText = data.cost_today.toFixed(4) + " EGP";
+                            document.getElementById('cost_overall').innerText = data.cost_overall.toFixed(4) + " EGP";
+
+                            if (data.alert) {
+                                document.getElementById('cost_today').classList.add("alert");
+                            }
+
+                            // Dynamic GPU Cards
+                            const grid = document.getElementById('gpu_grid');
+                            grid.innerHTML = "";
+                            data.gpu_data.forEach(gpu => {
+                                grid.innerHTML += `
+                                    <div class="card">
+                                        <span class="card-title" style="color:#76b900">${gpu.name}</span>
+                                        <div class="card-val">${Math.round(gpu.power)} W</div>
+                                        <div class="card-temp">${Math.round(gpu.temp)} °C</div>
+                                    </div>
+                                `;
+                            });
+
+                        } catch (e) { console.log(e); }
+                    }
+                    setInterval(update, 1000);
+                    update();
+                </script>
+            </body>
+            </html>
+            """)
+
+        @app.route('/api/data')
+        def data():
+            return jsonify(SHARED_DATA)
+
+        app.run(host='0.0.0.0', port=FLASK_PORT)
+
+    # --- MONITORING LOGIC ---
     def setup_nvml(self):
         try:
             pynvml.nvmlInit()
             count = pynvml.nvmlDeviceGetCount()
             for i in range(count):
                 handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-                raw_name = pynvml.nvmlDeviceGetName(handle)
-                name = raw_name.decode() if isinstance(raw_name, bytes) else raw_name
-                self.gpu_data.append({"handle": handle, "name": name, "widget_pwr": None})
+                name = pynvml.nvmlDeviceGetName(handle)
+                if isinstance(name, bytes): name = name.decode()
+                # Simplified name for mobile
+                short_name = name.replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").replace(" RTX", "")
+                self.gpu_data.append({"handle": handle, "name": name, "short": short_name, "widget_pwr": None})
             self.nvml_active = True
         except: self.nvml_active = False
 
@@ -321,8 +471,9 @@ class PowerMonitorApp(ctk.CTk):
         last_log = time.time()
         while self.running:
             total_nvidia_w = 0
-            nv_metrics = [] 
-            
+            nv_metrics = [] # List of dicts for CSV
+            shared_gpu_list = [] # List of dicts for Flask
+
             # NVIDIA
             if self.nvml_active:
                 for gpu in self.gpu_data:
@@ -330,14 +481,17 @@ class PowerMonitorApp(ctk.CTk):
                         w = pynvml.nvmlDeviceGetPowerUsage(gpu['handle']) / 1000.0
                         total_nvidia_w += w
                         t = pynvml.nvmlDeviceGetTemperature(gpu['handle'], 0)
+                        
                         nv_metrics.append({"power": w, "temp": t})
+                        shared_gpu_list.append({"name": gpu['short'], "power": w, "temp": t})
                         
                         if gpu['widget_pwr']:
                             ratio = min(1.0, w / gpu['max_w'])
                             gpu['widget_pwr'].configure(text=f"{int(w)} W")
                             gpu['widget_temp'].configure(text=f"{t} °C", text_color=self.get_color(t))
                             gpu['widget_bar'].set(ratio)
-                    except: nv_metrics.append({"power": 0, "temp": 0})
+                    except: 
+                        nv_metrics.append({"power": 0, "temp": 0})
 
             # LHM
             lhm = self.fetch_lhm_data()
@@ -359,7 +513,7 @@ class PowerMonitorApp(ctk.CTk):
             total_w = total_nvidia_w + igpu_w + cpu_w + 55
             if total_w > self.peak_w: self.peak_w = total_w
 
-            # Stats logic
+            # Metrics
             kwh_inc = (total_w * 1.0) / 3_600_000
             cost_inc = kwh_inc * PRICE_PER_KWH
             self.session_data["kwh"] += kwh_inc
@@ -374,10 +528,22 @@ class PowerMonitorApp(ctk.CTk):
             if datetime.now().strftime("%Y-%m-%d") != self.persistent_data["last_date"]:
                 self.persistent_data.update({"last_date": datetime.now().strftime("%Y-%m-%d"), "day_kwh": 0.0, "day_cost": 0.0, "day_seconds": 0})
 
+            # UPDATE SHARED DATA (For Flask)
+            SHARED_DATA["total_w"] = total_w
+            SHARED_DATA["peak_w"] = self.peak_w
+            SHARED_DATA["cpu_w"] = cpu_w
+            SHARED_DATA["cpu_t"] = cpu_t
+            SHARED_DATA["igpu_w"] = igpu_w
+            SHARED_DATA["igpu_t"] = igpu_t
+            SHARED_DATA["gpu_data"] = shared_gpu_list
+            SHARED_DATA["cost_session"] = self.session_data["cost"]
+            SHARED_DATA["cost_today"] = self.persistent_data["day_cost"]
+            SHARED_DATA["cost_overall"] = self.persistent_data["lifetime_cost"]
+            SHARED_DATA["alert"] = self.persistent_data["day_cost"] > DAILY_LIMIT_EGP
+
             # UI Update
             try:
-                self.update_chart_data(total_w) # <--- UPDATE CHART
-                
+                self.update_chart_data(total_w)
                 self.lbl_watts.configure(text=f"{int(total_w)} W")
                 self.lbl_peak.configure(text=f"Peak: {int(self.peak_w)} W")
                 
@@ -387,13 +553,11 @@ class PowerMonitorApp(ctk.CTk):
 
                 self.card_igpu['lbl_val'].configure(text=f"{int(igpu_w)} W")
                 self.card_igpu['lbl_temp'].configure(text=f"{int(igpu_t)} °C", text_color=self.get_color(igpu_t))
-                ratio_igpu = min(1.0, igpu_w / TDP_IGPU)
-                self.card_igpu['bar'].set(ratio_igpu)
+                self.card_igpu['bar'].set(min(1.0, igpu_w / TDP_IGPU))
                 
-                self.card_cpu['lbl_val'].configure(text=f"{int(cpu_w)} W", text_color="gray" if is_estimated else COLOR_TEXT_MAIN)
+                self.card_cpu['lbl_val'].configure(text=f"{int(cpu_w)} W")
                 self.card_cpu['lbl_temp'].configure(text=f"{int(cpu_t)} °C", text_color=self.get_color(cpu_t))
-                ratio_cpu = min(1.0, cpu_w / TDP_CPU)
-                self.card_cpu['bar'].set(ratio_cpu)
+                self.card_cpu['bar'].set(min(1.0, cpu_w / TDP_CPU))
 
                 self.lbl_session_time.configure(text=self.format_time(time.time() - self.start_time))
                 self.lbl_session_cost.configure(text=f"{self.session_data['cost']:.4f}")
