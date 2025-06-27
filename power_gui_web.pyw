@@ -5,6 +5,7 @@ import json
 import os
 import csv
 import socket
+import webbrowser # <--- NEW: To open links
 import pynvml
 import requests
 from datetime import datetime
@@ -28,13 +29,12 @@ LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
 FLASK_PORT = 5000
 
-# --- SHARED DATA (Bridge between GUI and Phone) ---
-# This dictionary holds the live data that the phone will fetch.
+# --- SHARED DATA ---
 SHARED_DATA = {
     "total_w": 0, "peak_w": 0,
     "cpu_w": 0, "cpu_t": 0,
     "igpu_w": 0, "igpu_t": 0,
-    "gpu_data": [], # List of {name, power, temp}
+    "gpu_data": [], 
     "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0,
     "time_session": "00:00:00",
     "alert": False
@@ -59,7 +59,6 @@ os.environ["PATH"] += os.pathsep + os.getcwd()
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
 
-# Disable Flask Logging (Keep console clean)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
@@ -76,7 +75,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
         window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (Remote Server)")
+        self.title("⚡ Power Monitor (Clickable Link)")
         self.geometry(f"{window_width}x880") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -169,30 +168,35 @@ class PowerMonitorApp(ctk.CTk):
         self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_footer.pack(side="bottom", pady=10, fill="x")
         
-        # Get Local IP
+        # Get Local IP & Set URL
         try:
             hostname = socket.gethostname()
             local_ip = socket.gethostbyname(hostname)
-            remote_url = f"http://{local_ip}:{FLASK_PORT}"
+            self.remote_url = f"http://{local_ip}:{FLASK_PORT}"
         except:
-            remote_url = "Unknown"
+            self.remote_url = "Unknown"
 
         self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack()
         
-        self.lbl_remote = ctk.CTkLabel(self.frame_footer, text=f"📱 Remote View: {remote_url}", text_color=COLOR_ACCENT, font=("Arial", 12, "bold"), cursor="hand2")
+        # Clickable Link
+        self.lbl_remote = ctk.CTkLabel(self.frame_footer, text=f"📱 Remote View: {self.remote_url}", text_color=COLOR_ACCENT, font=("Arial", 12, "bold"), cursor="hand2")
         self.lbl_remote.pack(pady=(2, 0))
+        self.lbl_remote.bind("<Button-1>", self.open_browser) # <--- CLICK EVENT
 
         # F. THREADS
-        # 1. Monitoring Thread
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
         self.monitor_thread.start()
         
-        # 2. Flask Thread
         self.flask_thread = threading.Thread(target=self.run_flask_server, daemon=True)
         self.flask_thread.start()
         
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def open_browser(self, event):
+        """Opens the remote URL in the default browser"""
+        if hasattr(self, 'remote_url') and self.remote_url != "Unknown":
+            webbrowser.open(self.remote_url)
 
     def setup_chart(self):
         self.fig = Figure(figsize=(5, 2), dpi=100)
@@ -249,7 +253,6 @@ class PowerMonitorApp(ctk.CTk):
 
         @app.route('/')
         def index():
-            # Mobile-optimized HTML
             return render_template_string("""
             <!DOCTYPE html>
             <html lang="en">
@@ -280,8 +283,7 @@ class PowerMonitorApp(ctk.CTk):
                 <div id="total_w" class="watts">--- W</div>
                 <div id="peak_w" class="peak">Peak: --- W</div>
 
-                <div class="grid" id="gpu_grid">
-                    </div>
+                <div class="grid" id="gpu_grid"></div>
 
                 <div class="grid">
                      <div class="card">
@@ -335,7 +337,6 @@ class PowerMonitorApp(ctk.CTk):
                                 document.getElementById('cost_today').classList.add("alert");
                             }
 
-                            // Dynamic GPU Cards
                             const grid = document.getElementById('gpu_grid');
                             grid.innerHTML = "";
                             data.gpu_data.forEach(gpu => {
@@ -372,7 +373,6 @@ class PowerMonitorApp(ctk.CTk):
                 handle = pynvml.nvmlDeviceGetHandleByIndex(i)
                 name = pynvml.nvmlDeviceGetName(handle)
                 if isinstance(name, bytes): name = name.decode()
-                # Simplified name for mobile
                 short_name = name.replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").replace(" RTX", "")
                 self.gpu_data.append({"handle": handle, "name": name, "short": short_name, "widget_pwr": None})
             self.nvml_active = True
@@ -471,8 +471,8 @@ class PowerMonitorApp(ctk.CTk):
         last_log = time.time()
         while self.running:
             total_nvidia_w = 0
-            nv_metrics = [] # List of dicts for CSV
-            shared_gpu_list = [] # List of dicts for Flask
+            nv_metrics = [] 
+            shared_gpu_list = [] 
 
             # NVIDIA
             if self.nvml_active:
@@ -528,7 +528,7 @@ class PowerMonitorApp(ctk.CTk):
             if datetime.now().strftime("%Y-%m-%d") != self.persistent_data["last_date"]:
                 self.persistent_data.update({"last_date": datetime.now().strftime("%Y-%m-%d"), "day_kwh": 0.0, "day_cost": 0.0, "day_seconds": 0})
 
-            # UPDATE SHARED DATA (For Flask)
+            # SHARED DATA
             SHARED_DATA["total_w"] = total_w
             SHARED_DATA["peak_w"] = self.peak_w
             SHARED_DATA["cpu_w"] = cpu_w
