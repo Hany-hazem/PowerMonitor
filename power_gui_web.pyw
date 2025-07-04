@@ -5,7 +5,7 @@ import json
 import os
 import csv
 import socket
-import webbrowser # <--- NEW: To open links
+import webbrowser 
 import pynvml
 import requests
 from datetime import datetime
@@ -75,7 +75,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
         window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (Clickable Link)")
+        self.title("⚡ Power Monitor (Smart Network)")
         self.geometry(f"{window_width}x880") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -168,13 +168,8 @@ class PowerMonitorApp(ctk.CTk):
         self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_footer.pack(side="bottom", pady=10, fill="x")
         
-        # Get Local IP & Set URL
-        try:
-            hostname = socket.gethostname()
-            local_ip = socket.gethostbyname(hostname)
-            self.remote_url = f"http://{local_ip}:{FLASK_PORT}"
-        except:
-            self.remote_url = "Unknown"
+        # SMART IP DETECTION
+        self.remote_url = self.get_lan_ip()
 
         self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack()
@@ -182,7 +177,7 @@ class PowerMonitorApp(ctk.CTk):
         # Clickable Link
         self.lbl_remote = ctk.CTkLabel(self.frame_footer, text=f"📱 Remote View: {self.remote_url}", text_color=COLOR_ACCENT, font=("Arial", 12, "bold"), cursor="hand2")
         self.lbl_remote.pack(pady=(2, 0))
-        self.lbl_remote.bind("<Button-1>", self.open_browser) # <--- CLICK EVENT
+        self.lbl_remote.bind("<Button-1>", self.open_browser)
 
         # F. THREADS
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
@@ -193,9 +188,20 @@ class PowerMonitorApp(ctk.CTk):
         
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    def get_lan_ip(self):
+        """Finds the actual local WiFi/Ethernet IP, avoiding Virtual/VPN adapters"""
+        try:
+            # Trick: Connect to a public DNS (8.8.8.8) to see which interface OS uses for internet
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return f"http://{ip}:{FLASK_PORT}"
+        except:
+            return "http://localhost:5000"
+
     def open_browser(self, event):
-        """Opens the remote URL in the default browser"""
-        if hasattr(self, 'remote_url') and self.remote_url != "Unknown":
+        if hasattr(self, 'remote_url') and "localhost" not in self.remote_url:
             webbrowser.open(self.remote_url)
 
     def setup_chart(self):
