@@ -5,7 +5,7 @@ import json
 import os
 import csv
 import socket
-import webbrowser 
+import webbrowser
 import pynvml
 import requests
 from datetime import datetime
@@ -75,8 +75,8 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
         window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (Smart Network)")
-        self.geometry(f"{window_width}x880") 
+        self.title("⚡ Power Monitor (Universal)")
+        self.geometry(f"{window_width}x900") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
@@ -164,20 +164,29 @@ class PowerMonitorApp(ctk.CTk):
         self.create_stat_row(2, "Today", "#00FF00")
         self.create_stat_row(3, "Overall", "#FFA500")
 
-        # E. FOOTER (Status + Remote Link)
+        # E. FOOTER (Multi-Link)
         self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_footer.pack(side="bottom", pady=10, fill="x")
-        
-        # SMART IP DETECTION
-        self.remote_url = self.get_lan_ip()
 
         self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack()
         
-        # Clickable Link
-        self.lbl_remote = ctk.CTkLabel(self.frame_footer, text=f"📱 Remote View: {self.remote_url}", text_color=COLOR_ACCENT, font=("Arial", 12, "bold"), cursor="hand2")
-        self.lbl_remote.pack(pady=(2, 0))
-        self.lbl_remote.bind("<Button-1>", self.open_browser)
+        # Detect ALL IPs (LAN + Tailscale)
+        ips = self.get_all_ips()
+        
+        # Create a clickable label for EACH IP found
+        if not ips:
+             ctk.CTkLabel(self.frame_footer, text="No Network Found", text_color="gray").pack()
+        else:
+            for ip in ips:
+                link = f"http://{ip}:{FLASK_PORT}"
+                label_text = f"☁️ Tailscale: {link}" if ip.startswith("100.") else f"🏠 Home LAN: {link}"
+                color = "#E040FB" if ip.startswith("100.") else COLOR_ACCENT
+                
+                lbl = ctk.CTkLabel(self.frame_footer, text=label_text, text_color=color, font=("Arial", 12, "bold"), cursor="hand2")
+                lbl.pack(pady=2)
+                # Use a closure to capture the specific link for this loop iteration
+                lbl.bind("<Button-1>", lambda e, url=link: webbrowser.open(url))
 
         # F. THREADS
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
@@ -188,21 +197,28 @@ class PowerMonitorApp(ctk.CTk):
         
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    def get_lan_ip(self):
-        """Finds the actual local WiFi/Ethernet IP, avoiding Virtual/VPN adapters"""
+    def get_all_ips(self):
+        """Finds ALL valid IPs (LAN and VPN)"""
+        ip_list = []
         try:
-            # Trick: Connect to a public DNS (8.8.8.8) to see which interface OS uses for internet
+            # Method 1: Hostname resolution (detects all adapters including Tailscale)
+            hostname = socket.gethostname()
+            for ip in socket.gethostbyname_ex(hostname)[2]:
+                if not ip.startswith("127."):
+                    ip_list.append(ip)
+        except: pass
+        
+        # Method 2: Google DNS trick (reliable for main LAN)
+        try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
+            main_ip = s.getsockname()[0]
             s.close()
-            return f"http://{ip}:{FLASK_PORT}"
-        except:
-            return "http://localhost:5000"
-
-    def open_browser(self, event):
-        if hasattr(self, 'remote_url') and "localhost" not in self.remote_url:
-            webbrowser.open(self.remote_url)
+            if main_ip not in ip_list:
+                ip_list.insert(0, main_ip)
+        except: pass
+        
+        return list(dict.fromkeys(ip_list)) # Remove duplicates
 
     def setup_chart(self):
         self.fig = Figure(figsize=(5, 2), dpi=100)
