@@ -32,8 +32,8 @@ FLASK_PORT = 5000
 # --- SHARED DATA ---
 SHARED_DATA = {
     "total_w": 0, "peak_w": 0,
-    "cpu_w": 0, "cpu_t": 0,
-    "igpu_w": 0, "igpu_t": 0,
+    "cpu_w": 0, "cpu_t": 0, "cpu_load": 0,
+    "igpu_w": 0, "igpu_t": 0, "igpu_load": 0,
     "gpu_data": [], 
     "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0,
     "time_session": "00:00:00",
@@ -75,7 +75,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
         window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (Universal)")
+        self.title("⚡ Power Monitor (Workload Edition)")
         self.geometry(f"{window_width}x900") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -171,10 +171,9 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack()
         
-        # Detect ALL IPs (LAN + Tailscale)
+        # Detect ALL IPs
         ips = self.get_all_ips()
         
-        # Create a clickable label for EACH IP found
         if not ips:
              ctk.CTkLabel(self.frame_footer, text="No Network Found", text_color="gray").pack()
         else:
@@ -185,7 +184,6 @@ class PowerMonitorApp(ctk.CTk):
                 
                 lbl = ctk.CTkLabel(self.frame_footer, text=label_text, text_color=color, font=("Arial", 12, "bold"), cursor="hand2")
                 lbl.pack(pady=2)
-                # Use a closure to capture the specific link for this loop iteration
                 lbl.bind("<Button-1>", lambda e, url=link: webbrowser.open(url))
 
         # F. THREADS
@@ -198,17 +196,13 @@ class PowerMonitorApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def get_all_ips(self):
-        """Finds ALL valid IPs (LAN and VPN)"""
         ip_list = []
         try:
-            # Method 1: Hostname resolution (detects all adapters including Tailscale)
             hostname = socket.gethostname()
             for ip in socket.gethostbyname_ex(hostname)[2]:
                 if not ip.startswith("127."):
                     ip_list.append(ip)
         except: pass
-        
-        # Method 2: Google DNS trick (reliable for main LAN)
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
@@ -217,8 +211,7 @@ class PowerMonitorApp(ctk.CTk):
             if main_ip not in ip_list:
                 ip_list.insert(0, main_ip)
         except: pass
-        
-        return list(dict.fromkeys(ip_list)) # Remove duplicates
+        return list(dict.fromkeys(ip_list))
 
     def setup_chart(self):
         self.fig = Figure(figsize=(5, 2), dpi=100)
@@ -253,7 +246,7 @@ class PowerMonitorApp(ctk.CTk):
         bar = ctk.CTkProgressBar(frame, width=100, height=6, progress_color=title_color)
         bar.set(0)
         bar.pack(pady=(5, 5))
-        lbl_temp = ctk.CTkLabel(frame, text="-- °C", font=("Arial", 12), text_color=COLOR_TEXT_SUB)
+        lbl_temp = ctk.CTkLabel(frame, text="-- °C | -- %", font=("Arial", 11), text_color=COLOR_TEXT_SUB) # Updated Label format
         lbl_temp.pack(pady=(0, 10))
         return {"frame": frame, "lbl_val": lbl_val, "lbl_temp": lbl_temp, "bar": bar, "max": max_val_estimate}
 
@@ -291,7 +284,7 @@ class PowerMonitorApp(ctk.CTk):
                     .card { background: #2b2b2b; padding: 15px; border-radius: 10px; }
                     .card-title { font-size: 12px; font-weight: bold; margin-bottom: 5px; display: block; }
                     .card-val { font-size: 22px; font-weight: bold; }
-                    .card-temp { font-size: 12px; color: #a0a0a0; }
+                    .card-temp { font-size: 11px; color: #a0a0a0; margin-top:5px; }
                     .stats { background: #2b2b2b; border-radius: 10px; padding: 15px; text-align: left; }
                     .row { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #404040; padding-bottom: 5px; }
                     .row:last-child { border: none; margin: 0; }
@@ -311,12 +304,12 @@ class PowerMonitorApp(ctk.CTk):
                      <div class="card">
                         <span class="card-title" style="color:#E040FB">iGPU (Radeon)</span>
                         <div id="igpu_w" class="card-val">0 W</div>
-                        <div id="igpu_t" class="card-temp">-- °C</div>
+                        <div id="igpu_stats" class="card-temp">-- °C | -- %</div>
                     </div>
                     <div class="card">
                         <span class="card-title" style="color:#ff8c00">Ryzen 9900X</span>
                         <div id="cpu_w" class="card-val">0 W</div>
-                        <div id="cpu_t" class="card-temp">-- °C</div>
+                        <div id="cpu_stats" class="card-temp">-- °C | -- %</div>
                     </div>
                 </div>
 
@@ -346,10 +339,10 @@ class PowerMonitorApp(ctk.CTk):
                             document.getElementById('peak_w').innerText = "Peak: " + Math.round(data.peak_w) + " W";
                             
                             document.getElementById('cpu_w').innerText = Math.round(data.cpu_w) + " W";
-                            document.getElementById('cpu_t').innerText = Math.round(data.cpu_t) + " °C";
+                            document.getElementById('cpu_stats').innerText = Math.round(data.cpu_t) + " °C | " + Math.round(data.cpu_load) + " %";
                             
                             document.getElementById('igpu_w').innerText = Math.round(data.igpu_w) + " W";
-                            document.getElementById('igpu_t').innerText = Math.round(data.igpu_t) + " °C";
+                            document.getElementById('igpu_stats').innerText = Math.round(data.igpu_t) + " °C | " + Math.round(data.igpu_load) + " %";
 
                             document.getElementById('cost_session').innerText = data.cost_session.toFixed(4) + " EGP";
                             document.getElementById('cost_today').innerText = data.cost_today.toFixed(4) + " EGP";
@@ -366,7 +359,7 @@ class PowerMonitorApp(ctk.CTk):
                                     <div class="card">
                                         <span class="card-title" style="color:#76b900">${gpu.name}</span>
                                         <div class="card-val">${Math.round(gpu.power)} W</div>
-                                        <div class="card-temp">${Math.round(gpu.temp)} °C</div>
+                                        <div class="card-temp">${Math.round(gpu.temp)} °C | ${Math.round(gpu.load)} %</div>
                                     </div>
                                 `;
                             });
@@ -419,14 +412,16 @@ class PowerMonitorApp(ctk.CTk):
 
     def init_csv(self):
         if not os.path.exists(LOG_FILE):
-            headers = ["Timestamp", "Total Watts", "Total Cost", "CPU Temp", "CPU Watts", "iGPU Temp", "iGPU Watts"]
-            for i in range(len(self.gpu_data)): headers.extend([f"GPU{i} Temp", f"GPU{i} Watts"])
+            headers = ["Timestamp", "Total Watts", "Total Cost", "CPU Temp", "CPU Watts", "CPU Load", "iGPU Temp", "iGPU Watts", "iGPU Load"]
+            for i in range(len(self.gpu_data)): headers.extend([f"GPU{i} Temp", f"GPU{i} Watts", f"GPU{i} Load"])
             with open(LOG_FILE, mode='w', newline='') as f: csv.writer(f).writerow(headers)
 
-    def log_to_csv(self, total_w, cpu_t, cpu_w, igpu_t, igpu_w, nv_metrics):
+    def log_to_csv(self, total_w, cpu_t, cpu_w, cpu_l, igpu_t, igpu_w, igpu_l, nv_metrics):
         try:
-            row = [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"{total_w:.1f}", f"{self.persistent_data['day_cost']:.4f}", f"{cpu_t:.1f}", f"{cpu_w:.1f}", f"{igpu_t:.1f}", f"{igpu_w:.1f}"]
-            for metric in nv_metrics: row.extend([f"{metric['temp']:.1f}", f"{metric['power']:.1f}"])
+            row = [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"{total_w:.1f}", f"{self.persistent_data['day_cost']:.4f}", 
+                   f"{cpu_t:.1f}", f"{cpu_w:.1f}", f"{cpu_l:.1f}", 
+                   f"{igpu_t:.1f}", f"{igpu_w:.1f}", f"{igpu_l:.1f}"]
+            for metric in nv_metrics: row.extend([f"{metric['temp']:.1f}", f"{metric['power']:.1f}", f"{metric['load']:.1f}"])
             with open(LOG_FILE, mode='a', newline='') as f: csv.writer(f).writerow(row)
         except: pass
 
@@ -504,20 +499,26 @@ class PowerMonitorApp(ctk.CTk):
                         total_nvidia_w += w
                         t = pynvml.nvmlDeviceGetTemperature(gpu['handle'], 0)
                         
-                        nv_metrics.append({"power": w, "temp": t})
-                        shared_gpu_list.append({"name": gpu['short'], "power": w, "temp": t})
+                        # Get Load %
+                        load_struct = pynvml.nvmlDeviceGetUtilizationRates(gpu['handle'])
+                        l = load_struct.gpu
+                        
+                        nv_metrics.append({"power": w, "temp": t, "load": l})
+                        shared_gpu_list.append({"name": gpu['short'], "power": w, "temp": t, "load": l})
                         
                         if gpu['widget_pwr']:
                             ratio = min(1.0, w / gpu['max_w'])
                             gpu['widget_pwr'].configure(text=f"{int(w)} W")
-                            gpu['widget_temp'].configure(text=f"{t} °C", text_color=self.get_color(t))
+                            # UPDATE LABEL with LOAD
+                            gpu['widget_temp'].configure(text=f"{t} °C  |  {l} %", text_color=self.get_color(t))
                             gpu['widget_bar'].set(ratio)
                     except: 
-                        nv_metrics.append({"power": 0, "temp": 0})
+                        nv_metrics.append({"power": 0, "temp": 0, "load": 0})
 
             # LHM
             lhm = self.fetch_lhm_data()
             cpu_w, igpu_w, cpu_t, igpu_t = 0, 0, 0, 0
+            cpu_l, igpu_l = 0, 0
             is_estimated = False
             status_msg = "Status: Live Data"
 
@@ -526,6 +527,11 @@ class PowerMonitorApp(ctk.CTk):
                 igpu_w = self.calculate_igpu_total(lhm)
                 cpu_t = self.find_sensor_value(lhm, ["Core (Tctl/Tdie)", "Package", "Core #1"], "Temperature")
                 igpu_t = self.find_sensor_value(lhm, ["GPU Core", "GPU Temperature"], "Temperature")
+                
+                # Fetch Load %
+                cpu_l = self.find_sensor_value(lhm, ["Total", "CPU Total"], "Load")
+                igpu_l = self.find_sensor_value(lhm, ["GPU Core", "D3D 3D", "Video Engine"], "Load") # Tries to find GPU load
+                
                 if cpu_w == 0: is_estimated = True
             else:
                 is_estimated = True
@@ -555,8 +561,10 @@ class PowerMonitorApp(ctk.CTk):
             SHARED_DATA["peak_w"] = self.peak_w
             SHARED_DATA["cpu_w"] = cpu_w
             SHARED_DATA["cpu_t"] = cpu_t
+            SHARED_DATA["cpu_load"] = cpu_l
             SHARED_DATA["igpu_w"] = igpu_w
             SHARED_DATA["igpu_t"] = igpu_t
+            SHARED_DATA["igpu_load"] = igpu_l
             SHARED_DATA["gpu_data"] = shared_gpu_list
             SHARED_DATA["cost_session"] = self.session_data["cost"]
             SHARED_DATA["cost_today"] = self.persistent_data["day_cost"]
@@ -573,12 +581,14 @@ class PowerMonitorApp(ctk.CTk):
                 elif total_w > 300: self.lbl_watts.configure(text_color=COLOR_WARN)
                 else: self.lbl_watts.configure(text_color=COLOR_ACCENT)
 
+                # iGPU Card
                 self.card_igpu['lbl_val'].configure(text=f"{int(igpu_w)} W")
-                self.card_igpu['lbl_temp'].configure(text=f"{int(igpu_t)} °C", text_color=self.get_color(igpu_t))
+                self.card_igpu['lbl_temp'].configure(text=f"{int(igpu_t)} °C  |  {int(igpu_l)} %", text_color=self.get_color(igpu_t))
                 self.card_igpu['bar'].set(min(1.0, igpu_w / TDP_IGPU))
                 
+                # CPU Card
                 self.card_cpu['lbl_val'].configure(text=f"{int(cpu_w)} W")
-                self.card_cpu['lbl_temp'].configure(text=f"{int(cpu_t)} °C", text_color=self.get_color(cpu_t))
+                self.card_cpu['lbl_temp'].configure(text=f"{int(cpu_t)} °C  |  {int(cpu_l)} %", text_color=self.get_color(cpu_t))
                 self.card_cpu['bar'].set(min(1.0, cpu_w / TDP_CPU))
 
                 self.lbl_session_time.configure(text=self.format_time(time.time() - self.start_time))
@@ -603,7 +613,7 @@ class PowerMonitorApp(ctk.CTk):
 
             if time.time() - last_log > 60:
                 self.save_data()
-                self.log_to_csv(total_w, cpu_t, cpu_w, igpu_t, igpu_w, nv_metrics)
+                self.log_to_csv(total_w, cpu_t, cpu_w, cpu_l, igpu_t, igpu_w, igpu_l, nv_metrics)
                 last_log = time.time()
             time.sleep(1)
 
