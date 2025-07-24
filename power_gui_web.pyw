@@ -75,7 +75,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
         window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (Workload Edition)")
+        self.title("⚡ Power Monitor (Load Logging)")
         self.geometry(f"{window_width}x900") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -95,7 +95,7 @@ class PowerMonitorApp(ctk.CTk):
             self.history_y.append(0)
 
         self.save_data()
-        self.init_csv()
+        self.init_csv() # <--- Checks for old CSV format
 
         # --- UI LAYOUT ---
         
@@ -164,16 +164,15 @@ class PowerMonitorApp(ctk.CTk):
         self.create_stat_row(2, "Today", "#00FF00")
         self.create_stat_row(3, "Overall", "#FFA500")
 
-        # E. FOOTER (Multi-Link)
+        # E. FOOTER
         self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_footer.pack(side="bottom", pady=10, fill="x")
 
         self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack()
         
-        # Detect ALL IPs
+        # IP Links
         ips = self.get_all_ips()
-        
         if not ips:
              ctk.CTkLabel(self.frame_footer, text="No Network Found", text_color="gray").pack()
         else:
@@ -246,7 +245,7 @@ class PowerMonitorApp(ctk.CTk):
         bar = ctk.CTkProgressBar(frame, width=100, height=6, progress_color=title_color)
         bar.set(0)
         bar.pack(pady=(5, 5))
-        lbl_temp = ctk.CTkLabel(frame, text="-- °C | -- %", font=("Arial", 11), text_color=COLOR_TEXT_SUB) # Updated Label format
+        lbl_temp = ctk.CTkLabel(frame, text="-- °C | -- %", font=("Arial", 11), text_color=COLOR_TEXT_SUB)
         lbl_temp.pack(pady=(0, 10))
         return {"frame": frame, "lbl_val": lbl_val, "lbl_temp": lbl_temp, "bar": bar, "max": max_val_estimate}
 
@@ -411,9 +410,28 @@ class PowerMonitorApp(ctk.CTk):
         with open(STATE_FILE, 'w') as f: json.dump(self.persistent_data, f, indent=4)
 
     def init_csv(self):
+        # Header definition (NEW)
+        headers = ["Timestamp", "Total Watts", "Total Cost", "CPU Temp", "CPU Watts", "CPU Load", "iGPU Temp", "iGPU Watts", "iGPU Load"]
+        for i in range(len(self.gpu_data)): headers.extend([f"GPU{i} Temp", f"GPU{i} Watts", f"GPU{i} Load"])
+        
+        should_create = False
         if not os.path.exists(LOG_FILE):
-            headers = ["Timestamp", "Total Watts", "Total Cost", "CPU Temp", "CPU Watts", "CPU Load", "iGPU Temp", "iGPU Watts", "iGPU Load"]
-            for i in range(len(self.gpu_data)): headers.extend([f"GPU{i} Temp", f"GPU{i} Watts", f"GPU{i} Load"])
+            should_create = True
+        else:
+            # Check if headers match old version
+            try:
+                with open(LOG_FILE, 'r') as f:
+                    existing_headers = f.readline().strip().split(',')
+                # If "CPU Load" is missing, the file is OLD.
+                if "CPU Load" not in existing_headers:
+                    print("⚠️ Old CSV detected. Backing up and upgrading...")
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    os.rename(LOG_FILE, f"power_log_backup_{timestamp}.csv")
+                    should_create = True
+            except: 
+                should_create = True
+        
+        if should_create:
             with open(LOG_FILE, mode='w', newline='') as f: csv.writer(f).writerow(headers)
 
     def log_to_csv(self, total_w, cpu_t, cpu_w, cpu_l, igpu_t, igpu_w, igpu_l, nv_metrics):
