@@ -28,6 +28,7 @@ STATE_FILE = "power_state.json"
 LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
 FLASK_PORT = 5000
+CSV_LOG_INTERVAL = 1  # <--- NEW: Log every 1 second (was 60)
 
 # --- SHARED DATA ---
 SHARED_DATA = {
@@ -75,7 +76,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
         window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (Load Logging)")
+        self.title("⚡ Power Monitor (High Frequency Log)")
         self.geometry(f"{window_width}x900") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -95,7 +96,7 @@ class PowerMonitorApp(ctk.CTk):
             self.history_y.append(0)
 
         self.save_data()
-        self.init_csv() # <--- Checks for old CSV format
+        self.init_csv()
 
         # --- UI LAYOUT ---
         
@@ -410,7 +411,7 @@ class PowerMonitorApp(ctk.CTk):
         with open(STATE_FILE, 'w') as f: json.dump(self.persistent_data, f, indent=4)
 
     def init_csv(self):
-        # Header definition (NEW)
+        # Header definition
         headers = ["Timestamp", "Total Watts", "Total Cost", "CPU Temp", "CPU Watts", "CPU Load", "iGPU Temp", "iGPU Watts", "iGPU Load"]
         for i in range(len(self.gpu_data)): headers.extend([f"GPU{i} Temp", f"GPU{i} Watts", f"GPU{i} Load"])
         
@@ -418,11 +419,10 @@ class PowerMonitorApp(ctk.CTk):
         if not os.path.exists(LOG_FILE):
             should_create = True
         else:
-            # Check if headers match old version
+            # CHECK if headers match (Auto-Upgrade old files)
             try:
                 with open(LOG_FILE, 'r') as f:
                     existing_headers = f.readline().strip().split(',')
-                # If "CPU Load" is missing, the file is OLD.
                 if "CPU Load" not in existing_headers:
                     print("⚠️ Old CSV detected. Backing up and upgrading...")
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -503,7 +503,7 @@ class PowerMonitorApp(ctk.CTk):
         return f"{h:02d}:{m:02d}:{s:02d}"
 
     def background_monitor(self):
-        last_log = time.time()
+        last_save = time.time()
         while self.running:
             total_nvidia_w = 0
             nv_metrics = [] 
@@ -517,7 +517,6 @@ class PowerMonitorApp(ctk.CTk):
                         total_nvidia_w += w
                         t = pynvml.nvmlDeviceGetTemperature(gpu['handle'], 0)
                         
-                        # Get Load %
                         load_struct = pynvml.nvmlDeviceGetUtilizationRates(gpu['handle'])
                         l = load_struct.gpu
                         
@@ -527,7 +526,6 @@ class PowerMonitorApp(ctk.CTk):
                         if gpu['widget_pwr']:
                             ratio = min(1.0, w / gpu['max_w'])
                             gpu['widget_pwr'].configure(text=f"{int(w)} W")
-                            # UPDATE LABEL with LOAD
                             gpu['widget_temp'].configure(text=f"{t} °C  |  {l} %", text_color=self.get_color(t))
                             gpu['widget_bar'].set(ratio)
                     except: 
@@ -546,9 +544,8 @@ class PowerMonitorApp(ctk.CTk):
                 cpu_t = self.find_sensor_value(lhm, ["Core (Tctl/Tdie)", "Package", "Core #1"], "Temperature")
                 igpu_t = self.find_sensor_value(lhm, ["GPU Core", "GPU Temperature"], "Temperature")
                 
-                # Fetch Load %
                 cpu_l = self.find_sensor_value(lhm, ["Total", "CPU Total"], "Load")
-                igpu_l = self.find_sensor_value(lhm, ["GPU Core", "D3D 3D", "Video Engine"], "Load") # Tries to find GPU load
+                igpu_l = self.find_sensor_value(lhm, ["GPU Core", "D3D 3D", "Video Engine"], "Load") 
                 
                 if cpu_w == 0: is_estimated = True
             else:
@@ -629,10 +626,14 @@ class PowerMonitorApp(ctk.CTk):
                     self.lbl_status.configure(text=status_msg, text_color="gray")
             except: pass
 
-            if time.time() - last_log > 60:
+            # LOGGING LOGIC
+            self.log_to_csv(total_w, cpu_t, cpu_w, cpu_l, igpu_t, igpu_w, igpu_l, nv_metrics)
+            
+            # SAVE LOGIC (Every 60s)
+            if time.time() - last_save > 60:
                 self.save_data()
-                self.log_to_csv(total_w, cpu_t, cpu_w, cpu_l, igpu_t, igpu_w, igpu_l, nv_metrics)
-                last_log = time.time()
+                last_save = time.time()
+                
             time.sleep(1)
 
     def on_close(self):
