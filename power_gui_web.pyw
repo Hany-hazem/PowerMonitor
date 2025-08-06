@@ -28,7 +28,7 @@ STATE_FILE = "power_state.json"
 LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
 FLASK_PORT = 5000
-CSV_LOG_INTERVAL = 1  # <--- NEW: Log every 1 second (was 60)
+CSV_LOG_INTERVAL = 1 
 
 # --- SHARED DATA ---
 SHARED_DATA = {
@@ -76,7 +76,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
         window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (High Frequency Log)")
+        self.title("⚡ Power Monitor (Fail-Safe)")
         self.geometry(f"{window_width}x900") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -419,12 +419,10 @@ class PowerMonitorApp(ctk.CTk):
         if not os.path.exists(LOG_FILE):
             should_create = True
         else:
-            # CHECK if headers match (Auto-Upgrade old files)
             try:
                 with open(LOG_FILE, 'r') as f:
                     existing_headers = f.readline().strip().split(',')
                 if "CPU Load" not in existing_headers:
-                    print("⚠️ Old CSV detected. Backing up and upgrading...")
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     os.rename(LOG_FILE, f"power_log_backup_{timestamp}.csv")
                     should_create = True
@@ -539,15 +537,23 @@ class PowerMonitorApp(ctk.CTk):
             status_msg = "Status: Live Data"
 
             if lhm:
-                cpu_w = self.find_sensor_value(lhm, ["Package", "CPU Package"], "Power")
+                # EXPANDED SENSOR SEARCH (Fail-Safe)
+                cpu_w = self.find_sensor_value(lhm, ["Package", "CPU Package", "CPU PPT", "CPU Cores"], "Power")
                 igpu_w = self.calculate_igpu_total(lhm)
+                
                 cpu_t = self.find_sensor_value(lhm, ["Core (Tctl/Tdie)", "Package", "Core #1"], "Temperature")
                 igpu_t = self.find_sensor_value(lhm, ["GPU Core", "GPU Temperature"], "Temperature")
                 
                 cpu_l = self.find_sensor_value(lhm, ["Total", "CPU Total"], "Load")
                 igpu_l = self.find_sensor_value(lhm, ["GPU Core", "D3D 3D", "Video Engine"], "Load") 
                 
-                if cpu_w == 0: is_estimated = True
+                # --- NEW FAIL-SAFE LOGIC ---
+                # If CPU Power is 0 but we have valid Load/Temp data, ESTIMATE IT.
+                if cpu_w == 0:
+                    is_estimated = True
+                    status_msg = "Status: Est. CPU Power"
+                    # Base 25W (Idle) + Load Scaling (Max 170W - 25W = 145W range)
+                    cpu_w = 25.0 + (cpu_l * 1.45)
             else:
                 is_estimated = True
                 status_msg = "Status: Estimating (LHM Off)"
@@ -602,7 +608,7 @@ class PowerMonitorApp(ctk.CTk):
                 self.card_igpu['bar'].set(min(1.0, igpu_w / TDP_IGPU))
                 
                 # CPU Card
-                self.card_cpu['lbl_val'].configure(text=f"{int(cpu_w)} W")
+                self.card_cpu['lbl_val'].configure(text=f"{int(cpu_w)} W", text_color="gray" if is_estimated else COLOR_TEXT_MAIN)
                 self.card_cpu['lbl_temp'].configure(text=f"{int(cpu_t)} °C  |  {int(cpu_l)} %", text_color=self.get_color(cpu_t))
                 self.card_cpu['bar'].set(min(1.0, cpu_w / TDP_CPU))
 
@@ -634,7 +640,7 @@ class PowerMonitorApp(ctk.CTk):
                 self.save_data()
                 last_save = time.time()
                 
-            time.sleep(1)
+            time.sleep(CSV_LOG_INTERVAL)
 
     def on_close(self):
         self.running = False
