@@ -8,6 +8,7 @@ import socket
 import webbrowser
 import pynvml
 import requests
+import psutil # <--- NEW: Direct CPU Monitoring
 from datetime import datetime
 from collections import deque
 
@@ -76,7 +77,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
         window_width = 800 + extra_width
         
-        self.title("⚡ Power Monitor (Fail-Safe)")
+        self.title("⚡ Power Monitor (Invincible)")
         self.geometry(f"{window_width}x900") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -507,6 +508,9 @@ class PowerMonitorApp(ctk.CTk):
             nv_metrics = [] 
             shared_gpu_list = [] 
 
+            # ALWAYS GET REAL OS LOAD (Independent of LHM)
+            real_cpu_load = psutil.cpu_percent(interval=None)
+
             # NVIDIA
             if self.nvml_active:
                 for gpu in self.gpu_data:
@@ -537,27 +541,40 @@ class PowerMonitorApp(ctk.CTk):
             status_msg = "Status: Live Data"
 
             if lhm:
-                # EXPANDED SENSOR SEARCH (Fail-Safe)
                 cpu_w = self.find_sensor_value(lhm, ["Package", "CPU Package", "CPU PPT", "CPU Cores"], "Power")
                 igpu_w = self.calculate_igpu_total(lhm)
                 
                 cpu_t = self.find_sensor_value(lhm, ["Core (Tctl/Tdie)", "Package", "Core #1"], "Temperature")
                 igpu_t = self.find_sensor_value(lhm, ["GPU Core", "GPU Temperature"], "Temperature")
                 
+                # CPU Load (Preferred from LHM, but we have OS backup)
                 cpu_l = self.find_sensor_value(lhm, ["Total", "CPU Total"], "Load")
                 igpu_l = self.find_sensor_value(lhm, ["GPU Core", "D3D 3D", "Video Engine"], "Load") 
                 
-                # --- NEW FAIL-SAFE LOGIC ---
-                # If CPU Power is 0 but we have valid Load/Temp data, ESTIMATE IT.
+                # FAIL-SAFE: If CPU Power is 0 but we are running
                 if cpu_w == 0:
                     is_estimated = True
-                    status_msg = "Status: Est. CPU Power"
-                    # Base 25W (Idle) + Load Scaling (Max 170W - 25W = 145W range)
-                    cpu_w = 25.0 + (cpu_l * 1.45)
+                    status_msg = "⚠️ LHM Error (Est. CPU)"
+                    # Use REAL OS load if LHM load is 0
+                    use_load = cpu_l if cpu_l > 0 else real_cpu_load
+                    cpu_w = 25.0 + (use_load * 1.5)
+                    cpu_l = use_load # Update for display
             else:
+                # FULL FALLBACK MODE (LHM Dead)
                 is_estimated = True
-                status_msg = "Status: Estimating (LHM Off)"
-                if not self.nvml_active: cpu_w = 55 
+                status_msg = "⚠️ LHM Down (Using Estimates)"
+                
+                # Use psutil for Load
+                cpu_l = real_cpu_load
+                
+                # Estimate Power based on OS Load
+                cpu_w = 25.0 + (cpu_l * 1.5)
+                
+                # Reset iGPU/Temps since we can't see them
+                igpu_w = 0
+                igpu_t = 0
+                igpu_l = 0
+                cpu_t = 0 # No temp sensor without LHM
             
             total_w = total_nvidia_w + igpu_w + cpu_w + 55
             if total_w > self.peak_w: self.peak_w = total_w
