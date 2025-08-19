@@ -8,7 +8,7 @@ import socket
 import webbrowser
 import pynvml
 import requests
-import psutil # <--- NEW: Direct CPU Monitoring
+import psutil
 from datetime import datetime
 from collections import deque
 
@@ -30,12 +30,14 @@ LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
 FLASK_PORT = 5000
 CSV_LOG_INTERVAL = 1 
+OVERHEAD_WATTS = 55  # <--- Visible in UI now
 
 # --- SHARED DATA ---
 SHARED_DATA = {
     "total_w": 0, "peak_w": 0,
     "cpu_w": 0, "cpu_t": 0, "cpu_load": 0,
     "igpu_w": 0, "igpu_t": 0, "igpu_load": 0,
+    "sys_w": OVERHEAD_WATTS,
     "gpu_data": [], 
     "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0,
     "time_session": "00:00:00",
@@ -50,12 +52,14 @@ COLOR_TEXT_SUB = "#a0a0a0"
 COLOR_ACCENT = "#00E5FF"    
 COLOR_WARN = "#FFD700"      
 COLOR_CRIT = "#FF4444"      
+COLOR_SYS = "#9E9E9E"       # Grey for System
 
 # --- ESTIMATED TDP ---
 TDP_NVIDIA_HIGH = 285 
 TDP_NVIDIA_MID = 120  
 TDP_CPU = 170         
 TDP_IGPU = 60         
+TDP_SYS = 100         
 
 os.environ["PATH"] += os.pathsep + os.getcwd()
 ctk.set_appearance_mode("Dark")
@@ -73,11 +77,11 @@ class PowerMonitorApp(ctk.CTk):
         self.nvml_active = False
         self.setup_nvml()
         
-        # Window Calculation
-        extra_width = max(0, (len(self.gpu_data) - 1) * 160) 
-        window_width = 800 + extra_width
+        # Window Calculation (Wider for extra card)
+        extra_width = max(0, (len(self.gpu_data)) * 160) 
+        window_width = 850 + extra_width
         
-        self.title("⚡ Power Monitor (Invincible)")
+        self.title("⚡ Power Monitor (Transparency)")
         self.geometry(f"{window_width}x900") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -141,6 +145,16 @@ class PowerMonitorApp(ctk.CTk):
         self.card_cpu = self.create_metric_card(self.frame_hw, "Ryzen 9900X", "#ff8c00", TDP_CPU)
         self.card_cpu['frame'].grid(row=0, column=col_idx, padx=8)
         col_idx += 1
+        
+        # NEW SYSTEM CARD
+        self.card_sys = self.create_metric_card(self.frame_hw, "System (Misc)", COLOR_SYS, TDP_SYS)
+        self.card_sys['frame'].grid(row=0, column=col_idx, padx=8)
+        # Set fixed values immediately
+        self.card_sys['lbl_val'].configure(text=f"{OVERHEAD_WATTS} W")
+        self.card_sys['lbl_temp'].configure(text="Mobo/Ram/Fans")
+        self.card_sys['bar'].set(OVERHEAD_WATTS / TDP_SYS)
+        col_idx += 1
+        
         self.frame_hw.grid_columnconfigure(col_idx, weight=1)
 
         # C. LIVE CHART
@@ -312,6 +326,11 @@ class PowerMonitorApp(ctk.CTk):
                         <div id="cpu_w" class="card-val">0 W</div>
                         <div id="cpu_stats" class="card-temp">-- °C | -- %</div>
                     </div>
+                     <div class="card">
+                        <span class="card-title" style="color:#9E9E9E">System (Misc)</span>
+                        <div id="sys_w" class="card-val">0 W</div>
+                        <div class="card-temp">Mobo/Ram/Fans</div>
+                    </div>
                 </div>
 
                 <div class="stats">
@@ -344,6 +363,8 @@ class PowerMonitorApp(ctk.CTk):
                             
                             document.getElementById('igpu_w').innerText = Math.round(data.igpu_w) + " W";
                             document.getElementById('igpu_stats').innerText = Math.round(data.igpu_t) + " °C | " + Math.round(data.igpu_load) + " %";
+
+                            document.getElementById('sys_w').innerText = Math.round(data.sys_w) + " W";
 
                             document.getElementById('cost_session').innerText = data.cost_session.toFixed(4) + " EGP";
                             document.getElementById('cost_today').innerText = data.cost_today.toFixed(4) + " EGP";
@@ -412,7 +433,6 @@ class PowerMonitorApp(ctk.CTk):
         with open(STATE_FILE, 'w') as f: json.dump(self.persistent_data, f, indent=4)
 
     def init_csv(self):
-        # Header definition
         headers = ["Timestamp", "Total Watts", "Total Cost", "CPU Temp", "CPU Watts", "CPU Load", "iGPU Temp", "iGPU Watts", "iGPU Load"]
         for i in range(len(self.gpu_data)): headers.extend([f"GPU{i} Temp", f"GPU{i} Watts", f"GPU{i} Load"])
         
@@ -508,10 +528,8 @@ class PowerMonitorApp(ctk.CTk):
             nv_metrics = [] 
             shared_gpu_list = [] 
 
-            # ALWAYS GET REAL OS LOAD (Independent of LHM)
             real_cpu_load = psutil.cpu_percent(interval=None)
 
-            # NVIDIA
             if self.nvml_active:
                 for gpu in self.gpu_data:
                     try: 
@@ -533,7 +551,6 @@ class PowerMonitorApp(ctk.CTk):
                     except: 
                         nv_metrics.append({"power": 0, "temp": 0, "load": 0})
 
-            # LHM
             lhm = self.fetch_lhm_data()
             cpu_w, igpu_w, cpu_t, igpu_t = 0, 0, 0, 0
             cpu_l, igpu_l = 0, 0
@@ -547,36 +564,23 @@ class PowerMonitorApp(ctk.CTk):
                 cpu_t = self.find_sensor_value(lhm, ["Core (Tctl/Tdie)", "Package", "Core #1"], "Temperature")
                 igpu_t = self.find_sensor_value(lhm, ["GPU Core", "GPU Temperature"], "Temperature")
                 
-                # CPU Load (Preferred from LHM, but we have OS backup)
                 cpu_l = self.find_sensor_value(lhm, ["Total", "CPU Total"], "Load")
                 igpu_l = self.find_sensor_value(lhm, ["GPU Core", "D3D 3D", "Video Engine"], "Load") 
                 
-                # FAIL-SAFE: If CPU Power is 0 but we are running
                 if cpu_w == 0:
                     is_estimated = True
                     status_msg = "⚠️ LHM Error (Est. CPU)"
-                    # Use REAL OS load if LHM load is 0
                     use_load = cpu_l if cpu_l > 0 else real_cpu_load
                     cpu_w = 25.0 + (use_load * 1.5)
-                    cpu_l = use_load # Update for display
+                    cpu_l = use_load 
             else:
-                # FULL FALLBACK MODE (LHM Dead)
                 is_estimated = True
                 status_msg = "⚠️ LHM Down (Using Estimates)"
-                
-                # Use psutil for Load
                 cpu_l = real_cpu_load
-                
-                # Estimate Power based on OS Load
                 cpu_w = 25.0 + (cpu_l * 1.5)
-                
-                # Reset iGPU/Temps since we can't see them
-                igpu_w = 0
-                igpu_t = 0
-                igpu_l = 0
-                cpu_t = 0 # No temp sensor without LHM
+                igpu_w = 0; igpu_t = 0; igpu_l = 0; cpu_t = 0 
             
-            total_w = total_nvidia_w + igpu_w + cpu_w + 55
+            total_w = total_nvidia_w + igpu_w + cpu_w + OVERHEAD_WATTS # <--- Variable now
             if total_w > self.peak_w: self.peak_w = total_w
 
             # Metrics
@@ -603,6 +607,7 @@ class PowerMonitorApp(ctk.CTk):
             SHARED_DATA["igpu_w"] = igpu_w
             SHARED_DATA["igpu_t"] = igpu_t
             SHARED_DATA["igpu_load"] = igpu_l
+            SHARED_DATA["sys_w"] = OVERHEAD_WATTS # <--- NEW
             SHARED_DATA["gpu_data"] = shared_gpu_list
             SHARED_DATA["cost_session"] = self.session_data["cost"]
             SHARED_DATA["cost_today"] = self.persistent_data["day_cost"]
@@ -619,12 +624,10 @@ class PowerMonitorApp(ctk.CTk):
                 elif total_w > 300: self.lbl_watts.configure(text_color=COLOR_WARN)
                 else: self.lbl_watts.configure(text_color=COLOR_ACCENT)
 
-                # iGPU Card
                 self.card_igpu['lbl_val'].configure(text=f"{int(igpu_w)} W")
                 self.card_igpu['lbl_temp'].configure(text=f"{int(igpu_t)} °C  |  {int(igpu_l)} %", text_color=self.get_color(igpu_t))
                 self.card_igpu['bar'].set(min(1.0, igpu_w / TDP_IGPU))
                 
-                # CPU Card
                 self.card_cpu['lbl_val'].configure(text=f"{int(cpu_w)} W", text_color="gray" if is_estimated else COLOR_TEXT_MAIN)
                 self.card_cpu['lbl_temp'].configure(text=f"{int(cpu_t)} °C  |  {int(cpu_l)} %", text_color=self.get_color(cpu_t))
                 self.card_cpu['bar'].set(min(1.0, cpu_w / TDP_CPU))
@@ -649,10 +652,8 @@ class PowerMonitorApp(ctk.CTk):
                     self.lbl_status.configure(text=status_msg, text_color="gray")
             except: pass
 
-            # LOGGING LOGIC
             self.log_to_csv(total_w, cpu_t, cpu_w, cpu_l, igpu_t, igpu_w, igpu_l, nv_metrics)
             
-            # SAVE LOGIC (Every 60s)
             if time.time() - last_save > 60:
                 self.save_data()
                 last_save = time.time()
