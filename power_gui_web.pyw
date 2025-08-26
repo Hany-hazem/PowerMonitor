@@ -30,7 +30,7 @@ LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
 FLASK_PORT = 5000
 CSV_LOG_INTERVAL = 1 
-OVERHEAD_WATTS = 55  # <--- Visible in UI now
+OVERHEAD_WATTS = 80  # <--- CUSTOMIZED FOR MSI X870 + ARCTIC III
 
 # --- SHARED DATA ---
 SHARED_DATA = {
@@ -52,14 +52,14 @@ COLOR_TEXT_SUB = "#a0a0a0"
 COLOR_ACCENT = "#00E5FF"    
 COLOR_WARN = "#FFD700"      
 COLOR_CRIT = "#FF4444"      
-COLOR_SYS = "#9E9E9E"       # Grey for System
+COLOR_SYS = "#9E9E9E"       
 
 # --- ESTIMATED TDP ---
 TDP_NVIDIA_HIGH = 285 
 TDP_NVIDIA_MID = 120  
 TDP_CPU = 170         
 TDP_IGPU = 60         
-TDP_SYS = 100         
+TDP_SYS = 150         
 
 os.environ["PATH"] += os.pathsep + os.getcwd()
 ctk.set_appearance_mode("Dark")
@@ -81,7 +81,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title("⚡ Power Monitor (Transparency)")
+        self.title("⚡ Power Monitor (Precision Edition)")
         self.geometry(f"{window_width}x900") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -146,10 +146,9 @@ class PowerMonitorApp(ctk.CTk):
         self.card_cpu['frame'].grid(row=0, column=col_idx, padx=8)
         col_idx += 1
         
-        # NEW SYSTEM CARD
+        # SYSTEM CARD
         self.card_sys = self.create_metric_card(self.frame_hw, "System (Misc)", COLOR_SYS, TDP_SYS)
         self.card_sys['frame'].grid(row=0, column=col_idx, padx=8)
-        # Set fixed values immediately
         self.card_sys['lbl_val'].configure(text=f"{OVERHEAD_WATTS} W")
         self.card_sys['lbl_temp'].configure(text="Mobo/Ram/Fans")
         self.card_sys['bar'].set(OVERHEAD_WATTS / TDP_SYS)
@@ -187,7 +186,6 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack()
         
-        # IP Links
         ips = self.get_all_ips()
         if not ips:
              ctk.CTkLabel(self.frame_footer, text="No Network Found", text_color="gray").pack()
@@ -580,7 +578,7 @@ class PowerMonitorApp(ctk.CTk):
                 cpu_w = 25.0 + (cpu_l * 1.5)
                 igpu_w = 0; igpu_t = 0; igpu_l = 0; cpu_t = 0 
             
-            total_w = total_nvidia_w + igpu_w + cpu_w + OVERHEAD_WATTS # <--- Variable now
+            total_w = total_nvidia_w + igpu_w + cpu_w + OVERHEAD_WATTS 
             if total_w > self.peak_w: self.peak_w = total_w
 
             # Metrics
@@ -607,7 +605,7 @@ class PowerMonitorApp(ctk.CTk):
             SHARED_DATA["igpu_w"] = igpu_w
             SHARED_DATA["igpu_t"] = igpu_t
             SHARED_DATA["igpu_load"] = igpu_l
-            SHARED_DATA["sys_w"] = OVERHEAD_WATTS # <--- NEW
+            SHARED_DATA["sys_w"] = OVERHEAD_WATTS
             SHARED_DATA["gpu_data"] = shared_gpu_list
             SHARED_DATA["cost_session"] = self.session_data["cost"]
             SHARED_DATA["cost_today"] = self.persistent_data["day_cost"]
