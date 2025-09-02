@@ -30,7 +30,7 @@ LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
 FLASK_PORT = 5000
 CSV_LOG_INTERVAL = 1 
-OVERHEAD_WATTS = 80  # <--- CUSTOMIZED FOR MSI X870 + ARCTIC III
+OVERHEAD_WATTS = 80  # MSI X870 + AIO Overhead
 
 # --- SHARED DATA ---
 SHARED_DATA = {
@@ -77,11 +77,11 @@ class PowerMonitorApp(ctk.CTk):
         self.nvml_active = False
         self.setup_nvml()
         
-        # Window Calculation (Wider for extra card)
+        # Window Calculation
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title("⚡ Power Monitor (Precision Edition)")
+        self.title("⚡ Power Monitor (AI Trainer VRAM)")
         self.geometry(f"{window_width}x900") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -375,11 +375,17 @@ class PowerMonitorApp(ctk.CTk):
                             const grid = document.getElementById('gpu_grid');
                             grid.innerHTML = "";
                             data.gpu_data.forEach(gpu => {
+                                // VRAM Logic for Mobile View
+                                let subText = Math.round(gpu.temp) + " °C | " + Math.round(gpu.load) + " %";
+                                if(gpu.vram_used > 0) {
+                                    subText = Math.round(gpu.temp) + " °C | VRAM: " + gpu.vram_used.toFixed(1) + " GB";
+                                }
+                                
                                 grid.innerHTML += `
                                     <div class="card">
                                         <span class="card-title" style="color:#76b900">${gpu.name}</span>
                                         <div class="card-val">${Math.round(gpu.power)} W</div>
-                                        <div class="card-temp">${Math.round(gpu.temp)} °C | ${Math.round(gpu.load)} %</div>
+                                        <div class="card-temp">${subText}</div>
                                     </div>
                                 `;
                             });
@@ -432,7 +438,7 @@ class PowerMonitorApp(ctk.CTk):
 
     def init_csv(self):
         headers = ["Timestamp", "Total Watts", "Total Cost", "CPU Temp", "CPU Watts", "CPU Load", "iGPU Temp", "iGPU Watts", "iGPU Load"]
-        for i in range(len(self.gpu_data)): headers.extend([f"GPU{i} Temp", f"GPU{i} Watts", f"GPU{i} Load"])
+        for i in range(len(self.gpu_data)): headers.extend([f"GPU{i} Temp", f"GPU{i} Watts", f"GPU{i} Load", f"GPU{i} VRAM Used"])
         
         should_create = False
         if not os.path.exists(LOG_FILE):
@@ -441,7 +447,8 @@ class PowerMonitorApp(ctk.CTk):
             try:
                 with open(LOG_FILE, 'r') as f:
                     existing_headers = f.readline().strip().split(',')
-                if "CPU Load" not in existing_headers:
+                # Check for VRAM columns (Upgrade check)
+                if "GPU0 VRAM Used" not in existing_headers:
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     os.rename(LOG_FILE, f"power_log_backup_{timestamp}.csv")
                     should_create = True
@@ -456,7 +463,8 @@ class PowerMonitorApp(ctk.CTk):
             row = [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"{total_w:.1f}", f"{self.persistent_data['day_cost']:.4f}", 
                    f"{cpu_t:.1f}", f"{cpu_w:.1f}", f"{cpu_l:.1f}", 
                    f"{igpu_t:.1f}", f"{igpu_w:.1f}", f"{igpu_l:.1f}"]
-            for metric in nv_metrics: row.extend([f"{metric['temp']:.1f}", f"{metric['power']:.1f}", f"{metric['load']:.1f}"])
+            for metric in nv_metrics: 
+                row.extend([f"{metric['temp']:.1f}", f"{metric['power']:.1f}", f"{metric['load']:.1f}", f"{metric['vram_used']:.2f}"])
             with open(LOG_FILE, mode='a', newline='') as f: csv.writer(f).writerow(row)
         except: pass
 
@@ -538,16 +546,28 @@ class PowerMonitorApp(ctk.CTk):
                         load_struct = pynvml.nvmlDeviceGetUtilizationRates(gpu['handle'])
                         l = load_struct.gpu
                         
-                        nv_metrics.append({"power": w, "temp": t, "load": l})
-                        shared_gpu_list.append({"name": gpu['short'], "power": w, "temp": t, "load": l})
+                        # VRAM (AI Specific)
+                        mem_info = pynvml.nvmlDeviceGetMemoryInfo(gpu['handle'])
+                        vram_used_gb = mem_info.used / (1024**3)
+                        vram_total_gb = mem_info.total / (1024**3)
+                        
+                        nv_metrics.append({"power": w, "temp": t, "load": l, "vram_used": vram_used_gb})
+                        shared_gpu_list.append({"name": gpu['short'], "power": w, "temp": t, "load": l, "vram_used": vram_used_gb})
                         
                         if gpu['widget_pwr']:
-                            ratio = min(1.0, w / gpu['max_w'])
-                            gpu['widget_pwr'].configure(text=f"{int(w)} W")
-                            gpu['widget_temp'].configure(text=f"{t} °C  |  {l} %", text_color=self.get_color(t))
+                            # Update Text: Shows VRAM instead of Load if load > 0 (Useful for training)
+                            status_text = f"{t} °C | {l} %"
+                            if vram_used_gb > 1.0: # If using more than 1GB, show VRAM details
+                                status_text = f"{vram_used_gb:.1f} / {vram_total_gb:.1f} GB"
+                            
+                            gpu['widget_temp'].configure(text=status_text, text_color=self.get_color(t))
+                            
+                            # Bar tracks VRAM usage now (Better for AI)
+                            ratio = min(1.0, vram_used_gb / vram_total_gb)
                             gpu['widget_bar'].set(ratio)
+                            gpu['widget_pwr'].configure(text=f"{int(w)} W")
                     except: 
-                        nv_metrics.append({"power": 0, "temp": 0, "load": 0})
+                        nv_metrics.append({"power": 0, "temp": 0, "load": 0, "vram_used": 0})
 
             lhm = self.fetch_lhm_data()
             cpu_w, igpu_w, cpu_t, igpu_t = 0, 0, 0, 0
