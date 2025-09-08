@@ -81,7 +81,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title("⚡ Power Monitor (AI Trainer VRAM)")
+        self.title("⚡ Power Monitor (V31 Ultimate)")
         self.geometry(f"{window_width}x900") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -297,7 +297,7 @@ class PowerMonitorApp(ctk.CTk):
                     .card { background: #2b2b2b; padding: 15px; border-radius: 10px; }
                     .card-title { font-size: 12px; font-weight: bold; margin-bottom: 5px; display: block; }
                     .card-val { font-size: 22px; font-weight: bold; }
-                    .card-temp { font-size: 11px; color: #a0a0a0; margin-top:5px; }
+                    .card-temp { font-size: 11px; color: #a0a0a0; margin-top:5px; line-height: 1.4; }
                     .stats { background: #2b2b2b; border-radius: 10px; padding: 15px; text-align: left; }
                     .row { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #404040; padding-bottom: 5px; }
                     .row:last-child { border: none; margin: 0; }
@@ -375,10 +375,10 @@ class PowerMonitorApp(ctk.CTk):
                             const grid = document.getElementById('gpu_grid');
                             grid.innerHTML = "";
                             data.gpu_data.forEach(gpu => {
-                                // VRAM Logic for Mobile View
+                                // VRAM Logic for Mobile View - NOW SHOWS BOTH
                                 let subText = Math.round(gpu.temp) + " °C | " + Math.round(gpu.load) + " %";
-                                if(gpu.vram_used > 0) {
-                                    subText = Math.round(gpu.temp) + " °C | VRAM: " + gpu.vram_used.toFixed(1) + " GB";
+                                if(gpu.vram_used > 1.0) {
+                                    subText += "<br>VRAM: " + gpu.vram_used.toFixed(1) + " GB";
                                 }
                                 
                                 grid.innerHTML += `
@@ -555,14 +555,14 @@ class PowerMonitorApp(ctk.CTk):
                         shared_gpu_list.append({"name": gpu['short'], "power": w, "temp": t, "load": l, "vram_used": vram_used_gb})
                         
                         if gpu['widget_pwr']:
-                            # Update Text: Shows VRAM instead of Load if load > 0 (Useful for training)
+                            # SHOW BOTH: Temp+Load AND VRAM (Multi-line)
                             status_text = f"{t} °C | {l} %"
-                            if vram_used_gb > 1.0: # If using more than 1GB, show VRAM details
-                                status_text = f"{vram_used_gb:.1f} / {vram_total_gb:.1f} GB"
+                            if vram_used_gb > 1.0: 
+                                status_text += f"\n{vram_used_gb:.1f} / {vram_total_gb:.1f} GB VRAM"
                             
                             gpu['widget_temp'].configure(text=status_text, text_color=self.get_color(t))
                             
-                            # Bar tracks VRAM usage now (Better for AI)
+                            # Bar still tracks VRAM (Most critical for AI)
                             ratio = min(1.0, vram_used_gb / vram_total_gb)
                             gpu['widget_bar'].set(ratio)
                             gpu['widget_pwr'].configure(text=f"{int(w)} W")
