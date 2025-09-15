@@ -39,7 +39,7 @@ SHARED_DATA = {
     "igpu_w": 0, "igpu_t": 0, "igpu_load": 0,
     "sys_w": OVERHEAD_WATTS,
     "gpu_data": [], 
-    "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0,
+    "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0, "cost_est_month": 0.0,
     "time_session": "00:00:00",
     "alert": False
 }
@@ -81,8 +81,8 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title("⚡ Power Monitor (V31 Ultimate)")
-        self.geometry(f"{window_width}x900") 
+        self.title("⚡ Power Monitor (Forecaster)")
+        self.geometry(f"{window_width}x950") # Taller for extra row
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
@@ -146,7 +146,6 @@ class PowerMonitorApp(ctk.CTk):
         self.card_cpu['frame'].grid(row=0, column=col_idx, padx=8)
         col_idx += 1
         
-        # SYSTEM CARD
         self.card_sys = self.create_metric_card(self.frame_hw, "System (Misc)", COLOR_SYS, TDP_SYS)
         self.card_sys['frame'].grid(row=0, column=col_idx, padx=8)
         self.card_sys['lbl_val'].configure(text=f"{OVERHEAD_WATTS} W")
@@ -178,6 +177,12 @@ class PowerMonitorApp(ctk.CTk):
         self.create_stat_row(1, "Session", COLOR_ACCENT)
         self.create_stat_row(2, "Today", "#00FF00")
         self.create_stat_row(3, "Overall", "#FFA500")
+        
+        # New Estimate Row
+        ctk.CTkLabel(self.frame_stats, text="Est. Monthly:", font=("Arial", 13), text_color=COLOR_TEXT_MAIN).grid(row=4, column=0, pady=5, sticky="w")
+        self.lbl_est_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 15, "bold"), text_color="#E040FB")
+        self.lbl_est_cost.grid(row=4, column=1, pady=5, sticky="e")
+        ctk.CTkLabel(self.frame_stats, text="(If 24/7)", font=("Arial", 12), text_color="gray").grid(row=4, column=3, pady=5, sticky="e")
 
         # E. FOOTER
         self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
@@ -344,6 +349,10 @@ class PowerMonitorApp(ctk.CTk):
                         <span class="label">Overall</span>
                         <span id="cost_overall" class="cost" style="color:#FFA500">0.00 EGP</span>
                     </div>
+                    <div class="row">
+                        <span class="label" style="color:#a0a0a0">Est. Month (24/7)</span>
+                        <span id="cost_est_month" class="cost" style="color:#E040FB">0.00 EGP</span>
+                    </div>
                 </div>
 
                 <script>
@@ -367,6 +376,7 @@ class PowerMonitorApp(ctk.CTk):
                             document.getElementById('cost_session').innerText = data.cost_session.toFixed(4) + " EGP";
                             document.getElementById('cost_today').innerText = data.cost_today.toFixed(4) + " EGP";
                             document.getElementById('cost_overall').innerText = data.cost_overall.toFixed(4) + " EGP";
+                            document.getElementById('cost_est_month').innerText = data.cost_est_month.toFixed(2) + " EGP";
 
                             if (data.alert) {
                                 document.getElementById('cost_today').classList.add("alert");
@@ -375,7 +385,6 @@ class PowerMonitorApp(ctk.CTk):
                             const grid = document.getElementById('gpu_grid');
                             grid.innerHTML = "";
                             data.gpu_data.forEach(gpu => {
-                                // VRAM Logic for Mobile View - NOW SHOWS BOTH
                                 let subText = Math.round(gpu.temp) + " °C | " + Math.round(gpu.load) + " %";
                                 if(gpu.vram_used > 1.0) {
                                     subText += "<br>VRAM: " + gpu.vram_used.toFixed(1) + " GB";
@@ -447,7 +456,6 @@ class PowerMonitorApp(ctk.CTk):
             try:
                 with open(LOG_FILE, 'r') as f:
                     existing_headers = f.readline().strip().split(',')
-                # Check for VRAM columns (Upgrade check)
                 if "GPU0 VRAM Used" not in existing_headers:
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     os.rename(LOG_FILE, f"power_log_backup_{timestamp}.csv")
@@ -546,7 +554,6 @@ class PowerMonitorApp(ctk.CTk):
                         load_struct = pynvml.nvmlDeviceGetUtilizationRates(gpu['handle'])
                         l = load_struct.gpu
                         
-                        # VRAM (AI Specific)
                         mem_info = pynvml.nvmlDeviceGetMemoryInfo(gpu['handle'])
                         vram_used_gb = mem_info.used / (1024**3)
                         vram_total_gb = mem_info.total / (1024**3)
@@ -555,14 +562,12 @@ class PowerMonitorApp(ctk.CTk):
                         shared_gpu_list.append({"name": gpu['short'], "power": w, "temp": t, "load": l, "vram_used": vram_used_gb})
                         
                         if gpu['widget_pwr']:
-                            # SHOW BOTH: Temp+Load AND VRAM (Multi-line)
                             status_text = f"{t} °C | {l} %"
                             if vram_used_gb > 1.0: 
                                 status_text += f"\n{vram_used_gb:.1f} / {vram_total_gb:.1f} GB VRAM"
                             
                             gpu['widget_temp'].configure(text=status_text, text_color=self.get_color(t))
                             
-                            # Bar still tracks VRAM (Most critical for AI)
                             ratio = min(1.0, vram_used_gb / vram_total_gb)
                             gpu['widget_bar'].set(ratio)
                             gpu['widget_pwr'].configure(text=f"{int(w)} W")
@@ -616,6 +621,10 @@ class PowerMonitorApp(ctk.CTk):
             if datetime.now().strftime("%Y-%m-%d") != self.persistent_data["last_date"]:
                 self.persistent_data.update({"last_date": datetime.now().strftime("%Y-%m-%d"), "day_kwh": 0.0, "day_cost": 0.0, "day_seconds": 0})
 
+            # CALC MONTHLY ESTIMATE
+            # (Current Power / 1000) * 24h * 30d * Rate
+            est_cost_month = (total_w / 1000.0) * 24.0 * 30.0 * PRICE_PER_KWH
+
             # SHARED DATA
             SHARED_DATA["total_w"] = total_w
             SHARED_DATA["peak_w"] = self.peak_w
@@ -630,6 +639,7 @@ class PowerMonitorApp(ctk.CTk):
             SHARED_DATA["cost_session"] = self.session_data["cost"]
             SHARED_DATA["cost_today"] = self.persistent_data["day_cost"]
             SHARED_DATA["cost_overall"] = self.persistent_data["lifetime_cost"]
+            SHARED_DATA["cost_est_month"] = est_cost_month # <--- NEW for Phone
             SHARED_DATA["alert"] = self.persistent_data["day_cost"] > DAILY_LIMIT_EGP
 
             # UI Update
@@ -661,6 +671,8 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_overall_time.configure(text=self.format_time(self.persistent_data["lifetime_seconds"]))
                 self.lbl_overall_cost.configure(text=f"{self.persistent_data['lifetime_cost']:.4f}")
                 self.lbl_overall_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
+                
+                self.lbl_est_cost.configure(text=f"{est_cost_month:.2f} EGP") # <--- NEW Desktop
 
                 if self.persistent_data["day_cost"] > DAILY_LIMIT_EGP:
                     self.lbl_today_cost.configure(text_color=COLOR_CRIT)
