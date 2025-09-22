@@ -39,9 +39,11 @@ SHARED_DATA = {
     "igpu_w": 0, "igpu_t": 0, "igpu_load": 0,
     "sys_w": OVERHEAD_WATTS,
     "gpu_data": [], 
-    "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0, "cost_est_month": 0.0,
+    "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0, 
+    "cost_est_month": 0.0,
     "time_session": "00:00:00",
-    "alert": False
+    "alert": False,
+    "price_per_kwh": PRICE_PER_KWH # Shared for Web Calc
 }
 
 # --- THEME COLORS ---
@@ -81,8 +83,8 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title("⚡ Power Monitor (Forecaster)")
-        self.geometry(f"{window_width}x950") # Taller for extra row
+        self.title("⚡ Power Monitor (V33 Calculator)")
+        self.geometry(f"{window_width}x1000") # Taller for calc
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
@@ -178,13 +180,34 @@ class PowerMonitorApp(ctk.CTk):
         self.create_stat_row(2, "Today", "#00FF00")
         self.create_stat_row(3, "Overall", "#FFA500")
         
-        # New Estimate Row
-        ctk.CTkLabel(self.frame_stats, text="Est. Monthly:", font=("Arial", 13), text_color=COLOR_TEXT_MAIN).grid(row=4, column=0, pady=5, sticky="w")
-        self.lbl_est_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 15, "bold"), text_color="#E040FB")
-        self.lbl_est_cost.grid(row=4, column=1, pady=5, sticky="e")
-        ctk.CTkLabel(self.frame_stats, text="(If 24/7)", font=("Arial", 12), text_color="gray").grid(row=4, column=3, pady=5, sticky="e")
+        # Divider
+        ctk.CTkFrame(self.frame_stats, height=2, fg_color="#404040").grid(row=4, column=0, columnspan=4, sticky="ew", pady=10)
 
-        # E. FOOTER
+        # E. CALCULATOR SECTION (NEW)
+        calc_font = ("Arial", 11, "bold")
+        ctk.CTkLabel(self.frame_stats, text="CUSTOM CALCULATOR", font=calc_font, text_color="#E040FB").grid(row=5, column=0, pady=(5,0), sticky="w")
+        
+        # Inputs Frame
+        self.frame_calc = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
+        self.frame_calc.grid(row=6, column=0, columnspan=4, sticky="ew", pady=5)
+        
+        ctk.CTkLabel(self.frame_calc, text="Hours/Day:", text_color="gray").pack(side="left", padx=(0,5))
+        self.entry_hours = ctk.CTkEntry(self.frame_calc, width=50, height=25, justify="center")
+        self.entry_hours.pack(side="left")
+        self.entry_hours.insert(0, "24")
+        
+        ctk.CTkLabel(self.frame_calc, text="Days:", text_color="gray").pack(side="left", padx=(15,5))
+        self.entry_days = ctk.CTkEntry(self.frame_calc, width=50, height=25, justify="center")
+        self.entry_days.pack(side="left")
+        self.entry_days.insert(0, "30")
+        
+        self.btn_calc = ctk.CTkButton(self.frame_calc, text="Calculate", width=80, height=25, fg_color="#E040FB", hover_color="#AA00FF", command=self.calculate_custom_cost)
+        self.btn_calc.pack(side="left", padx=(20, 20))
+        
+        self.lbl_calc_result = ctk.CTkLabel(self.frame_calc, text="--- EGP", font=("Arial", 14, "bold"), text_color=COLOR_ACCENT)
+        self.lbl_calc_result.pack(side="left")
+
+        # F. FOOTER
         self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_footer.pack(side="bottom", pady=10, fill="x")
 
@@ -204,7 +227,7 @@ class PowerMonitorApp(ctk.CTk):
                 lbl.pack(pady=2)
                 lbl.bind("<Button-1>", lambda e, url=link: webbrowser.open(url))
 
-        # F. THREADS
+        # G. THREADS
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
         self.monitor_thread.start()
         
@@ -212,6 +235,19 @@ class PowerMonitorApp(ctk.CTk):
         self.flask_thread.start()
         
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def calculate_custom_cost(self):
+        try:
+            h = float(self.entry_hours.get())
+            d = float(self.entry_days.get())
+            # Use current total watts from SHARED_DATA
+            w = SHARED_DATA["total_w"]
+            
+            # (Watts / 1000) * Hours * Days * Price
+            cost = (w / 1000.0) * h * d * PRICE_PER_KWH
+            self.lbl_calc_result.configure(text=f"{cost:.2f} EGP")
+        except ValueError:
+            self.lbl_calc_result.configure(text="Error")
 
     def get_all_ips(self):
         ip_list = []
@@ -309,6 +345,11 @@ class PowerMonitorApp(ctk.CTk):
                     .label { font-size: 14px; }
                     .cost { font-size: 16px; font-weight: bold; }
                     .alert { color: #FF4444 !important; }
+                    
+                    /* Calc Section */
+                    .calc-box { margin-top: 15px; padding-top: 15px; border-top: 1px solid #404040; }
+                    .calc-input { background: #404040; border: none; color: white; width: 40px; text-align: center; padding: 3px; border-radius: 4px; }
+                    .calc-res { color: #E040FB; font-weight: bold; float: right; }
                 </style>
             </head>
             <body>
@@ -350,17 +391,30 @@ class PowerMonitorApp(ctk.CTk):
                         <span id="cost_overall" class="cost" style="color:#FFA500">0.00 EGP</span>
                     </div>
                     <div class="row">
-                        <span class="label" style="color:#a0a0a0">Est. Month (24/7)</span>
-                        <span id="cost_est_month" class="cost" style="color:#E040FB">0.00 EGP</span>
+                         <span class="label" style="color:#a0a0a0">Est. 24/7 (Month)</span>
+                         <span id="cost_est_month" class="cost" style="color:#gray">0.00 EGP</span>
+                    </div>
+
+                    <div class="calc-box">
+                        <div style="font-weight:bold; color:#E040FB; margin-bottom:5px;">Calculator</div>
+                        <span style="font-size:12px; color:gray">Hrs/Day:</span> <input id="in_hrs" class="calc-input" value="24" oninput="recalc()">
+                        <span style="font-size:12px; color:gray; margin-left:10px;">Days:</span> <input id="in_days" class="calc-input" value="30" oninput="recalc()">
+                        <span id="calc_res_web" class="calc-res">0.00 EGP</span>
                     </div>
                 </div>
 
                 <script>
+                    let currentWatts = 0;
+                    let price = 0;
+
                     async function update() {
                         try {
                             const res = await fetch('/api/data');
                             const data = await res.json();
                             
+                            currentWatts = data.total_w;
+                            price = data.price_per_kwh;
+
                             document.getElementById('total_w').innerText = Math.round(data.total_w) + " W";
                             document.getElementById('total_w').style.color = data.total_w > 500 ? "#FF4444" : (data.total_w > 300 ? "#FFD700" : "#00E5FF");
                             document.getElementById('peak_w').innerText = "Peak: " + Math.round(data.peak_w) + " W";
@@ -398,9 +452,19 @@ class PowerMonitorApp(ctk.CTk):
                                     </div>
                                 `;
                             });
+                            
+                            recalc(); // Auto update calculator based on live watts
 
                         } catch (e) { console.log(e); }
                     }
+
+                    function recalc() {
+                        let h = parseFloat(document.getElementById('in_hrs').value) || 0;
+                        let d = parseFloat(document.getElementById('in_days').value) || 0;
+                        let cost = (currentWatts / 1000.0) * h * d * price;
+                        document.getElementById('calc_res_web').innerText = cost.toFixed(2) + " EGP";
+                    }
+
                     setInterval(update, 1000);
                     update();
                 </script>
@@ -621,8 +685,7 @@ class PowerMonitorApp(ctk.CTk):
             if datetime.now().strftime("%Y-%m-%d") != self.persistent_data["last_date"]:
                 self.persistent_data.update({"last_date": datetime.now().strftime("%Y-%m-%d"), "day_kwh": 0.0, "day_cost": 0.0, "day_seconds": 0})
 
-            # CALC MONTHLY ESTIMATE
-            # (Current Power / 1000) * 24h * 30d * Rate
+            # CALC MONTHLY ESTIMATE (Fixed 24/7 for JSON API)
             est_cost_month = (total_w / 1000.0) * 24.0 * 30.0 * PRICE_PER_KWH
 
             # SHARED DATA
@@ -639,7 +702,7 @@ class PowerMonitorApp(ctk.CTk):
             SHARED_DATA["cost_session"] = self.session_data["cost"]
             SHARED_DATA["cost_today"] = self.persistent_data["day_cost"]
             SHARED_DATA["cost_overall"] = self.persistent_data["lifetime_cost"]
-            SHARED_DATA["cost_est_month"] = est_cost_month # <--- NEW for Phone
+            SHARED_DATA["cost_est_month"] = est_cost_month
             SHARED_DATA["alert"] = self.persistent_data["day_cost"] > DAILY_LIMIT_EGP
 
             # UI Update
@@ -671,8 +734,6 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_overall_time.configure(text=self.format_time(self.persistent_data["lifetime_seconds"]))
                 self.lbl_overall_cost.configure(text=f"{self.persistent_data['lifetime_cost']:.4f}")
                 self.lbl_overall_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
-                
-                self.lbl_est_cost.configure(text=f"{est_cost_month:.2f} EGP") # <--- NEW Desktop
 
                 if self.persistent_data["day_cost"] > DAILY_LIMIT_EGP:
                     self.lbl_today_cost.configure(text_color=COLOR_CRIT)
