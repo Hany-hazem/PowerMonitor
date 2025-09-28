@@ -43,7 +43,7 @@ SHARED_DATA = {
     "cost_est_month": 0.0,
     "time_session": "00:00:00",
     "alert": False,
-    "price_per_kwh": PRICE_PER_KWH # Shared for Web Calc
+    "price_per_kwh": PRICE_PER_KWH
 }
 
 # --- THEME COLORS ---
@@ -83,8 +83,8 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title("⚡ Power Monitor (V33 Calculator)")
-        self.geometry(f"{window_width}x1000") # Taller for calc
+        self.title("⚡ Power Monitor (Taskmaster V34)")
+        self.geometry(f"{window_width}x1000") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
@@ -180,32 +180,34 @@ class PowerMonitorApp(ctk.CTk):
         self.create_stat_row(2, "Today", "#00FF00")
         self.create_stat_row(3, "Overall", "#FFA500")
         
-        # Divider
         ctk.CTkFrame(self.frame_stats, height=2, fg_color="#404040").grid(row=4, column=0, columnspan=4, sticky="ew", pady=10)
 
-        # E. CALCULATOR SECTION (NEW)
+        # E. CALCULATOR SECTION
         calc_font = ("Arial", 11, "bold")
-        ctk.CTkLabel(self.frame_stats, text="CUSTOM CALCULATOR", font=calc_font, text_color="#E040FB").grid(row=5, column=0, pady=(5,0), sticky="w")
+        ctk.CTkLabel(self.frame_stats, text="TASK COST CALCULATOR", font=calc_font, text_color="#E040FB").grid(row=5, column=0, pady=(5,0), sticky="w")
         
-        # Inputs Frame
         self.frame_calc = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
         self.frame_calc.grid(row=6, column=0, columnspan=4, sticky="ew", pady=5)
         
-        ctk.CTkLabel(self.frame_calc, text="Hours/Day:", text_color="gray").pack(side="left", padx=(0,5))
-        self.entry_hours = ctk.CTkEntry(self.frame_calc, width=50, height=25, justify="center")
+        # Updated Labels for Task Duration
+        ctk.CTkLabel(self.frame_calc, text="Duration:", text_color="gray").pack(side="left", padx=(0,5))
+        self.entry_hours = ctk.CTkEntry(self.frame_calc, width=80, height=25, justify="center")
         self.entry_hours.pack(side="left")
-        self.entry_hours.insert(0, "24")
+        self.entry_hours.insert(0, "35") # Default to user request
         
         ctk.CTkLabel(self.frame_calc, text="Days:", text_color="gray").pack(side="left", padx=(15,5))
-        self.entry_days = ctk.CTkEntry(self.frame_calc, width=50, height=25, justify="center")
+        self.entry_days = ctk.CTkEntry(self.frame_calc, width=40, height=25, justify="center")
         self.entry_days.pack(side="left")
-        self.entry_days.insert(0, "30")
+        self.entry_days.insert(0, "1")
         
         self.btn_calc = ctk.CTkButton(self.frame_calc, text="Calculate", width=80, height=25, fg_color="#E040FB", hover_color="#AA00FF", command=self.calculate_custom_cost)
         self.btn_calc.pack(side="left", padx=(20, 20))
         
         self.lbl_calc_result = ctk.CTkLabel(self.frame_calc, text="--- EGP", font=("Arial", 14, "bold"), text_color=COLOR_ACCENT)
         self.lbl_calc_result.pack(side="left")
+        
+        # Helper text
+        ctk.CTkLabel(self.frame_stats, text="(Supports '35' or '20:25:17')", font=("Arial", 10), text_color="gray").grid(row=7, column=0, columnspan=4, sticky="w")
 
         # F. FOOTER
         self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
@@ -236,14 +238,24 @@ class PowerMonitorApp(ctk.CTk):
         
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    def parse_time_input(self, val_str):
+        # Handles "35", "35.5", "20:25:17", "1:30"
+        try:
+            if ":" in val_str:
+                parts = list(map(float, val_str.split(":")))
+                if len(parts) == 3: # HH:MM:SS
+                    return parts[0] + parts[1]/60 + parts[2]/3600
+                elif len(parts) == 2: # HH:MM (Assuming hours for training context)
+                    return parts[0] + parts[1]/60
+                return 0.0
+            return float(val_str)
+        except: return 0.0
+
     def calculate_custom_cost(self):
         try:
-            h = float(self.entry_hours.get())
+            h = self.parse_time_input(self.entry_hours.get())
             d = float(self.entry_days.get())
-            # Use current total watts from SHARED_DATA
             w = SHARED_DATA["total_w"]
-            
-            # (Watts / 1000) * Hours * Days * Price
             cost = (w / 1000.0) * h * d * PRICE_PER_KWH
             self.lbl_calc_result.configure(text=f"{cost:.2f} EGP")
         except ValueError:
@@ -348,8 +360,9 @@ class PowerMonitorApp(ctk.CTk):
                     
                     /* Calc Section */
                     .calc-box { margin-top: 15px; padding-top: 15px; border-top: 1px solid #404040; }
-                    .calc-input { background: #404040; border: none; color: white; width: 40px; text-align: center; padding: 3px; border-radius: 4px; }
-                    .calc-res { color: #E040FB; font-weight: bold; float: right; }
+                    .calc-input { background: #404040; border: none; color: white; width: 60px; text-align: center; padding: 5px; border-radius: 4px; }
+                    .calc-res { color: #E040FB; font-weight: bold; float: right; font-size: 16px; }
+                    .calc-sub { font-size:10px; color:gray; display:block; margin-top:2px; }
                 </style>
             </head>
             <body>
@@ -396,10 +409,16 @@ class PowerMonitorApp(ctk.CTk):
                     </div>
 
                     <div class="calc-box">
-                        <div style="font-weight:bold; color:#E040FB; margin-bottom:5px;">Calculator</div>
-                        <span style="font-size:12px; color:gray">Hrs/Day:</span> <input id="in_hrs" class="calc-input" value="24" oninput="recalc()">
-                        <span style="font-size:12px; color:gray; margin-left:10px;">Days:</span> <input id="in_days" class="calc-input" value="30" oninput="recalc()">
+                        <div style="font-weight:bold; color:#E040FB; margin-bottom:10px;">TASK COST CALCULATOR</div>
+                        
+                        <span style="font-size:12px; color:gray">Duration:</span> 
+                        <input id="in_hrs" class="calc-input" value="35" oninput="recalc()" placeholder="HH:MM:SS">
+                        
+                        <span style="font-size:12px; color:gray; margin-left:5px;">Days:</span> 
+                        <input id="in_days" class="calc-input" style="width:30px;" value="1" oninput="recalc()">
+                        
                         <span id="calc_res_web" class="calc-res">0.00 EGP</span>
+                        <span class="calc-sub">Supports "35" or "20:25:17"</span>
                     </div>
                 </div>
 
@@ -453,14 +472,27 @@ class PowerMonitorApp(ctk.CTk):
                                 `;
                             });
                             
-                            recalc(); // Auto update calculator based on live watts
+                            recalc();
 
                         } catch (e) { console.log(e); }
                     }
 
+                    function parseTime(val) {
+                        if (!val) return 0;
+                        if (val.toString().includes(":")) {
+                            let parts = val.split(":").map(Number);
+                            if (parts.length === 3) return parts[0] + parts[1]/60 + parts[2]/3600;
+                            if (parts.length === 2) return parts[0] + parts[1]/60;
+                            return 0;
+                        }
+                        return parseFloat(val) || 0;
+                    }
+
                     function recalc() {
-                        let h = parseFloat(document.getElementById('in_hrs').value) || 0;
+                        let valStr = document.getElementById('in_hrs').value;
+                        let h = parseTime(valStr);
                         let d = parseFloat(document.getElementById('in_days').value) || 0;
+                        
                         let cost = (currentWatts / 1000.0) * h * d * price;
                         document.getElementById('calc_res_web').innerText = cost.toFixed(2) + " EGP";
                     }
@@ -704,6 +736,7 @@ class PowerMonitorApp(ctk.CTk):
             SHARED_DATA["cost_overall"] = self.persistent_data["lifetime_cost"]
             SHARED_DATA["cost_est_month"] = est_cost_month
             SHARED_DATA["alert"] = self.persistent_data["day_cost"] > DAILY_LIMIT_EGP
+            SHARED_DATA["price_per_kwh"] = PRICE_PER_KWH # Add price for JS calc
 
             # UI Update
             try:
