@@ -6,11 +6,17 @@ import os
 import csv
 import socket
 import webbrowser
-import pynvml
 import requests
 import psutil
+import platform
 from datetime import datetime
 from collections import deque
+
+# --- SAFE IMPORTS (Universal Compatibility) ---
+try:
+    import pynvml
+except ImportError:
+    pynvml = None  # Handles systems where NVIDIA drivers don't exist
 
 # --- FLASK (WEB SERVER) ---
 from flask import Flask, jsonify, render_template_string
@@ -30,7 +36,7 @@ LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
 FLASK_PORT = 5000
 CSV_LOG_INTERVAL = 1 
-OVERHEAD_WATTS = 80  # MSI X870 + AIO Overhead
+OVERHEAD_WATTS = 80  # System Overhead
 
 # --- SHARED DATA ---
 SHARED_DATA = {
@@ -63,6 +69,9 @@ TDP_CPU = 170
 TDP_IGPU = 60         
 TDP_SYS = 150         
 
+# OS DETECTION
+IS_WINDOWS = platform.system() == "Windows"
+
 os.environ["PATH"] += os.pathsep + os.getcwd()
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -83,7 +92,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title("⚡ Power Monitor (Hybrid Calc V36)")
+        self.title(f"⚡ Power Monitor (V38 Universal - {platform.system()})")
         self.geometry(f"{window_width}x1050") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -214,12 +223,10 @@ class PowerMonitorApp(ctk.CTk):
         ctk.CTkLabel(self.frame_calc2, text="Custom Task:", text_color="#00E5FF", width=90, anchor="w").pack(side="left")
         self.entry_hours_2 = ctk.CTkEntry(self.frame_calc2, width=80, height=25, justify="center")
         self.entry_hours_2.pack(side="left")
-        self.entry_hours_2.insert(0, "35:25:17") # Default example
+        self.entry_hours_2.insert(0, "35:25:17") 
         
         ctk.CTkLabel(self.frame_calc2, text="(Duration)", text_color="gray").pack(side="left", padx=5)
-        
-        # Hidden inputs for layout consistency (Days = 1)
-        self.entry_days_2 = ctk.CTkEntry(self.frame_calc2, width=0, height=0) 
+        self.entry_days_2 = ctk.CTkEntry(self.frame_calc2, width=0, height=0) # Hidden
         self.entry_days_2.insert(0, "1")
         
         self.btn_calc_2 = ctk.CTkButton(self.frame_calc2, text="Calc", width=60, height=25, fg_color="#404040", hover_color="#606060", command=lambda: self.calculate_custom_cost(2))
@@ -258,7 +265,6 @@ class PowerMonitorApp(ctk.CTk):
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def parse_time_input(self, val_str):
-        # Cleans 'h' (e.g. '35h' -> '35')
         val_str = val_str.lower().replace("h", "").strip()
         try:
             if ":" in val_str:
@@ -544,6 +550,9 @@ class PowerMonitorApp(ctk.CTk):
 
     # --- MONITORING LOGIC ---
     def setup_nvml(self):
+        if pynvml is None:
+            self.nvml_active = False
+            return
         try:
             pynvml.nvmlInit()
             count = pynvml.nvmlDeviceGetCount()
@@ -605,6 +614,7 @@ class PowerMonitorApp(ctk.CTk):
         except: pass
 
     def fetch_lhm_data(self):
+        if not IS_WINDOWS: return None
         try:
             r = requests.get(LHM_URL, timeout=0.2)
             if r.status_code == 200: return r.json()
