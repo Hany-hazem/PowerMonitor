@@ -16,7 +16,7 @@ from collections import deque
 try:
     import pynvml
 except ImportError:
-    pynvml = None  # Handles systems where NVIDIA drivers don't exist
+    pynvml = None 
 
 # --- FLASK (WEB SERVER) ---
 from flask import Flask, jsonify, render_template_string
@@ -35,8 +35,8 @@ STATE_FILE = "power_state.json"
 LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
 FLASK_PORT = 5000
-CSV_LOG_INTERVAL = 1 
-OVERHEAD_WATTS = 80  # System Overhead
+CSV_LOG_INTERVAL = 1  # <--- CHANGE THIS to 5 or 10 to log less often!
+OVERHEAD_WATTS = 80   # MSI X870 + AIO Overhead
 
 # --- SHARED DATA ---
 SHARED_DATA = {
@@ -83,28 +83,24 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 1. Hardware Init
         self.gpu_data = [] 
         self.nvml_active = False
         self.setup_nvml()
         
-        # Window Calculation
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title(f"⚡ Power Monitor (V38 Universal - {platform.system()})")
+        self.title(f"⚡ Power Monitor (Bulletproof V39)")
         self.geometry(f"{window_width}x1050") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
-        # 2. Data Init
         self.running = True
         self.start_time = time.time()
         self.peak_w = 0 
         self.session_data = {"kwh": 0.0, "cost": 0.0}
         self.persistent_data = self.load_data()
         
-        # Graph Data
         self.history_x = deque(maxlen=60)
         self.history_y = deque(maxlen=60)
         for i in range(60): 
@@ -115,8 +111,6 @@ class PowerMonitorApp(ctk.CTk):
         self.init_csv()
 
         # --- UI LAYOUT ---
-        
-        # A. HEADER
         self.frame_header = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_header.pack(pady=(15, 5), fill="x")
         
@@ -129,7 +123,7 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_peak = ctk.CTkLabel(self.frame_header, text="Peak: 0 W", font=("Arial", 11), text_color="gray")
         self.lbl_peak.pack(pady=(0, 0))
 
-        # B. HARDWARE CARDS
+        # HARDWARE CARDS
         self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_hw.pack(pady=10, padx=20, fill="x")
         self.frame_hw.grid_columnconfigure(0, weight=1)
@@ -166,12 +160,12 @@ class PowerMonitorApp(ctk.CTk):
         
         self.frame_hw.grid_columnconfigure(col_idx, weight=1)
 
-        # C. LIVE CHART
+        # LIVE CHART
         self.frame_chart = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=12, height=200)
         self.frame_chart.pack(pady=10, padx=25, fill="x")
         self.setup_chart()
 
-        # D. STATS PANEL
+        # STATS PANEL
         self.frame_stats = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=12)
         self.frame_stats.pack(pady=10, padx=25, fill="x", ipadx=15, ipady=5)
         self.frame_stats.grid_columnconfigure(0, weight=1)
@@ -191,77 +185,56 @@ class PowerMonitorApp(ctk.CTk):
         
         ctk.CTkFrame(self.frame_stats, height=2, fg_color="#404040").grid(row=4, column=0, columnspan=4, sticky="ew", pady=10)
 
-        # E. CALCULATORS SECTION
+        # CALCULATORS
         calc_font = ("Arial", 11, "bold")
         ctk.CTkLabel(self.frame_stats, text="COST ESTIMATORS", font=calc_font, text_color="#E040FB").grid(row=5, column=0, pady=(5,0), sticky="w")
         
-        # --- CALCULATOR 1 (Monthly 24/7) ---
+        # CALC 1
         self.frame_calc1 = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
         self.frame_calc1.grid(row=6, column=0, columnspan=4, sticky="ew", pady=2)
-        
         ctk.CTkLabel(self.frame_calc1, text="Monthly 24/7:", text_color="#a0a0a0", width=90, anchor="w").pack(side="left")
-        self.entry_hours_1 = ctk.CTkEntry(self.frame_calc1, width=40, height=25, justify="center")
-        self.entry_hours_1.pack(side="left")
-        self.entry_hours_1.insert(0, "24")
-        
+        self.entry_hours_1 = ctk.CTkEntry(self.frame_calc1, width=40, height=25, justify="center"); self.entry_hours_1.pack(side="left"); self.entry_hours_1.insert(0, "24")
         ctk.CTkLabel(self.frame_calc1, text="h/d x", text_color="gray").pack(side="left", padx=5)
-        self.entry_days_1 = ctk.CTkEntry(self.frame_calc1, width=40, height=25, justify="center")
-        self.entry_days_1.pack(side="left")
-        self.entry_days_1.insert(0, "30")
-        
+        self.entry_days_1 = ctk.CTkEntry(self.frame_calc1, width=40, height=25, justify="center"); self.entry_days_1.pack(side="left"); self.entry_days_1.insert(0, "30")
         ctk.CTkLabel(self.frame_calc1, text="d", text_color="gray").pack(side="left", padx=2)
         self.btn_calc_1 = ctk.CTkButton(self.frame_calc1, text="Calc", width=60, height=25, fg_color="#404040", hover_color="#606060", command=lambda: self.calculate_custom_cost(1))
         self.btn_calc_1.pack(side="left", padx=10)
-        
         self.lbl_calc_result_1 = ctk.CTkLabel(self.frame_calc1, text="---", font=("Arial", 13, "bold"), text_color=COLOR_TEXT_MAIN)
         self.lbl_calc_result_1.pack(side="left")
 
-        # --- CALCULATOR 2 (Custom Task) ---
+        # CALC 2
         self.frame_calc2 = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
         self.frame_calc2.grid(row=7, column=0, columnspan=4, sticky="ew", pady=2)
-        
         ctk.CTkLabel(self.frame_calc2, text="Custom Task:", text_color="#00E5FF", width=90, anchor="w").pack(side="left")
-        self.entry_hours_2 = ctk.CTkEntry(self.frame_calc2, width=80, height=25, justify="center")
-        self.entry_hours_2.pack(side="left")
-        self.entry_hours_2.insert(0, "35:25:17") 
-        
+        self.entry_hours_2 = ctk.CTkEntry(self.frame_calc2, width=80, height=25, justify="center"); self.entry_hours_2.pack(side="left"); self.entry_hours_2.insert(0, "35:25:17") 
         ctk.CTkLabel(self.frame_calc2, text="(Duration)", text_color="gray").pack(side="left", padx=5)
-        self.entry_days_2 = ctk.CTkEntry(self.frame_calc2, width=0, height=0) # Hidden
-        self.entry_days_2.insert(0, "1")
-        
+        self.entry_days_2 = ctk.CTkEntry(self.frame_calc2, width=0, height=0); self.entry_days_2.insert(0, "1")
         self.btn_calc_2 = ctk.CTkButton(self.frame_calc2, text="Calc", width=60, height=25, fg_color="#404040", hover_color="#606060", command=lambda: self.calculate_custom_cost(2))
         self.btn_calc_2.pack(side="left", padx=10)
-        
         self.lbl_calc_result_2 = ctk.CTkLabel(self.frame_calc2, text="---", font=("Arial", 13, "bold"), text_color=COLOR_TEXT_MAIN)
         self.lbl_calc_result_2.pack(side="left")
 
-        # F. FOOTER
+        # FOOTER
         self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_footer.pack(side="bottom", pady=10, fill="x")
-
         self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack()
-        
         ips = self.get_all_ips()
-        if not ips:
-             ctk.CTkLabel(self.frame_footer, text="No Network Found", text_color="gray").pack()
+        if not ips: ctk.CTkLabel(self.frame_footer, text="No Network Found", text_color="gray").pack()
         else:
             for ip in ips:
                 link = f"http://{ip}:{FLASK_PORT}"
                 label_text = f"☁️ Tailscale: {link}" if ip.startswith("100.") else f"🏠 Home LAN: {link}"
                 color = "#E040FB" if ip.startswith("100.") else COLOR_ACCENT
-                
                 lbl = ctk.CTkLabel(self.frame_footer, text=label_text, text_color=color, font=("Arial", 12, "bold"), cursor="hand2")
                 lbl.pack(pady=2)
                 lbl.bind("<Button-1>", lambda e, url=link: webbrowser.open(url))
 
-        # G. THREADS
+        # THREADS
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
         self.monitor_thread.start()
-        
         self.flask_thread = threading.Thread(target=self.run_flask_server, daemon=True)
         self.flask_thread.start()
-        
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def parse_time_input(self, val_str):
@@ -291,38 +264,22 @@ class PowerMonitorApp(ctk.CTk):
 
     def get_all_ips(self):
         ip_list = []
-        try:
-            hostname = socket.gethostname()
-            for ip in socket.gethostbyname_ex(hostname)[2]:
-                if not ip.startswith("127."):
-                    ip_list.append(ip)
+        try: hostname = socket.gethostname(); ip_list = [ip for ip in socket.gethostbyname_ex(hostname)[2] if not ip.startswith("127.")]
         except: pass
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            main_ip = s.getsockname()[0]
-            s.close()
-            if main_ip not in ip_list:
-                ip_list.insert(0, main_ip)
+        try: s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(("8.8.8.8", 80)); main_ip = s.getsockname()[0]; s.close(); ip_list.insert(0, main_ip) if main_ip not in ip_list else None
         except: pass
         return list(dict.fromkeys(ip_list))
 
     def setup_chart(self):
-        self.fig = Figure(figsize=(5, 2), dpi=100)
-        self.fig.patch.set_facecolor(COLOR_CARD)
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_facecolor(COLOR_CARD)
+        self.fig = Figure(figsize=(5, 2), dpi=100); self.fig.patch.set_facecolor(COLOR_CARD)
+        self.ax = self.fig.add_subplot(111); self.ax.set_facecolor(COLOR_CARD)
         self.line, = self.ax.plot([], [], color=COLOR_ACCENT, linewidth=2)
         self.ax.grid(True, color="#404040", linestyle='--', linewidth=0.5)
-        self.ax.spines['top'].set_visible(False)
-        self.ax.spines['right'].set_visible(False)
-        self.ax.spines['bottom'].set_color('#404040')
-        self.ax.spines['left'].set_color('#404040')
-        self.ax.tick_params(axis='x', colors='gray', labelsize=8)
-        self.ax.tick_params(axis='y', colors='gray', labelsize=8)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_chart)
-        self.canvas.draw()
-        self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
+        for spine in self.ax.spines.values(): spine.set_visible(False)
+        self.ax.spines['bottom'].set_visible(True); self.ax.spines['bottom'].set_color('#404040')
+        self.ax.spines['left'].set_visible(True); self.ax.spines['left'].set_color('#404040')
+        self.ax.tick_params(axis='x', colors='gray', labelsize=8); self.ax.tick_params(axis='y', colors='gray', labelsize=8)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_chart); self.canvas.draw(); self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
 
     def update_chart_data(self, new_val):
         self.history_y.append(new_val)
@@ -332,43 +289,27 @@ class PowerMonitorApp(ctk.CTk):
         self.canvas.draw()
 
     def create_metric_card(self, parent, title, title_color, max_val_estimate):
-        frame = ctk.CTkFrame(parent, width=155, height=140, fg_color=COLOR_CARD, corner_radius=10)
-        frame.pack_propagate(False)
+        frame = ctk.CTkFrame(parent, width=155, height=140, fg_color=COLOR_CARD, corner_radius=10); frame.pack_propagate(False)
         ctk.CTkLabel(frame, text=title, font=("Arial", 11, "bold"), text_color=title_color).pack(pady=(12, 2))
-        lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 24, "bold"), text_color=COLOR_TEXT_MAIN)
-        lbl_val.pack(pady=0)
-        bar = ctk.CTkProgressBar(frame, width=100, height=6, progress_color=title_color)
-        bar.set(0)
-        bar.pack(pady=(5, 5))
-        lbl_temp = ctk.CTkLabel(frame, text="-- °C | -- %", font=("Arial", 11), text_color=COLOR_TEXT_SUB)
-        lbl_temp.pack(pady=(0, 10))
+        lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 24, "bold"), text_color=COLOR_TEXT_MAIN); lbl_val.pack(pady=0)
+        bar = ctk.CTkProgressBar(frame, width=100, height=6, progress_color=title_color); bar.set(0); bar.pack(pady=(5, 5))
+        lbl_temp = ctk.CTkLabel(frame, text="-- °C | -- %", font=("Arial", 11), text_color=COLOR_TEXT_SUB); lbl_temp.pack(pady=(0, 10))
         return {"frame": frame, "lbl_val": lbl_val, "lbl_temp": lbl_temp, "bar": bar, "max": max_val_estimate}
 
     def create_stat_row(self, row_idx, label_text, color):
         ctk.CTkLabel(self.frame_stats, text=f"{label_text}:", font=("Arial", 13), text_color=COLOR_TEXT_MAIN).grid(row=row_idx, column=0, pady=5, sticky="w")
-        lbl_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 15, "bold"), text_color=color)
-        lbl_cost.grid(row=row_idx, column=1, pady=5, sticky="e")
-        lbl_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12), text_color=COLOR_TEXT_MAIN)
-        lbl_kwh.grid(row=row_idx, column=2, pady=5, sticky="e")
-        lbl_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color=COLOR_TEXT_SUB)
-        lbl_time.grid(row=row_idx, column=3, pady=5, sticky="e")
-        setattr(self, f"lbl_{label_text.lower()}_cost", lbl_cost)
-        setattr(self, f"lbl_{label_text.lower()}_kwh", lbl_kwh)
-        setattr(self, f"lbl_{label_text.lower()}_time", lbl_time)
+        lbl_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 15, "bold"), text_color=color); lbl_cost.grid(row=row_idx, column=1, pady=5, sticky="e")
+        lbl_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12), text_color=COLOR_TEXT_MAIN); lbl_kwh.grid(row=row_idx, column=2, pady=5, sticky="e")
+        lbl_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color=COLOR_TEXT_SUB); lbl_time.grid(row=row_idx, column=3, pady=5, sticky="e")
+        setattr(self, f"lbl_{label_text.lower()}_cost", lbl_cost); setattr(self, f"lbl_{label_text.lower()}_kwh", lbl_kwh); setattr(self, f"lbl_{label_text.lower()}_time", lbl_time)
 
     # --- FLASK SERVER ---
     def run_flask_server(self):
         app = Flask(__name__)
-
         @app.route('/')
         def index():
             return render_template_string("""
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Power Monitor</title>
+            <!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Power Monitor</title>
                 <style>
                     body { background-color: #1a1a1a; color: white; font-family: 'Segoe UI', sans-serif; text-align: center; padding: 20px; }
                     h1 { margin-bottom: 5px; color: #a0a0a0; font-size: 16px; }
@@ -381,189 +322,89 @@ class PowerMonitorApp(ctk.CTk):
                     .card-temp { font-size: 11px; color: #a0a0a0; margin-top:5px; line-height: 1.4; }
                     .stats { background: #2b2b2b; border-radius: 10px; padding: 15px; text-align: left; }
                     .row { display: flex; justify-content: space-between; margin-bottom: 10px; border-bottom: 1px solid #404040; padding-bottom: 5px; }
-                    .row:last-child { border: none; margin: 0; }
-                    .label { font-size: 14px; }
-                    .cost { font-size: 16px; font-weight: bold; }
-                    .alert { color: #FF4444 !important; }
-                    
                     .calc-box { margin-top: 15px; padding-top: 15px; border-top: 1px solid #404040; }
                     .calc-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
                     .calc-input { background: #404040; border: none; color: white; width: 60px; text-align: center; padding: 5px; border-radius: 4px; }
                     .calc-res { color: #E040FB; font-weight: bold; font-size: 14px; min-width: 70px; text-align: right; }
                     .calc-sub { font-size:10px; color:gray; display:block; margin-top:2px; }
-                </style>
-            </head>
-            <body>
-                <h1>SYSTEM POWER DRAW</h1>
-                <div id="total_w" class="watts">--- W</div>
-                <div id="peak_w" class="peak">Peak: --- W</div>
-
+                </style></head><body>
+                <h1>SYSTEM POWER DRAW</h1><div id="total_w" class="watts">--- W</div><div id="peak_w" class="peak">Peak: --- W</div>
                 <div class="grid" id="gpu_grid"></div>
-
                 <div class="grid">
-                     <div class="card">
-                        <span class="card-title" style="color:#E040FB">iGPU (Radeon)</span>
-                        <div id="igpu_w" class="card-val">0 W</div>
-                        <div id="igpu_stats" class="card-temp">-- °C | -- %</div>
-                    </div>
-                    <div class="card">
-                        <span class="card-title" style="color:#ff8c00">Ryzen 9900X</span>
-                        <div id="cpu_w" class="card-val">0 W</div>
-                        <div id="cpu_stats" class="card-temp">-- °C | -- %</div>
-                    </div>
-                     <div class="card">
-                        <span class="card-title" style="color:#9E9E9E">System (Misc)</span>
-                        <div id="sys_w" class="card-val">0 W</div>
-                        <div class="card-temp">Mobo/Ram/Fans</div>
-                    </div>
+                     <div class="card"><span class="card-title" style="color:#E040FB">iGPU (Radeon)</span><div id="igpu_w" class="card-val">0 W</div><div id="igpu_stats" class="card-temp">-- °C | -- %</div></div>
+                     <div class="card"><span class="card-title" style="color:#ff8c00">Ryzen 9900X</span><div id="cpu_w" class="card-val">0 W</div><div id="cpu_stats" class="card-temp">-- °C | -- %</div></div>
+                     <div class="card"><span class="card-title" style="color:#9E9E9E">System (Misc)</span><div id="sys_w" class="card-val">0 W</div><div class="card-temp">Mobo/Ram/Fans</div></div>
                 </div>
-
                 <div class="stats">
-                    <div class="row">
-                        <span class="label">Session</span>
-                        <span id="cost_session" class="cost" style="color:#00E5FF">0.00 EGP</span>
-                    </div>
-                    <div class="row">
-                        <span class="label">Today</span>
-                        <span id="cost_today" class="cost" style="color:#00FF00">0.00 EGP</span>
-                    </div>
-                    <div class="row">
-                        <span class="label">Overall</span>
-                        <span id="cost_overall" class="cost" style="color:#FFA500">0.00 EGP</span>
-                    </div>
-                    <div class="row">
-                         <span class="label" style="color:#a0a0a0">Est. 24/7 (Month)</span>
-                         <span id="cost_est_month" class="cost" style="color:#gray">0.00 EGP</span>
-                    </div>
-
+                    <div class="row"><span class="label">Session</span><span id="cost_session" class="cost" style="color:#00E5FF">0.00 EGP</span></div>
+                    <div class="row"><span class="label">Today</span><span id="cost_today" class="cost" style="color:#00FF00">0.00 EGP</span></div>
+                    <div class="row"><span class="label">Overall</span><span id="cost_overall" class="cost" style="color:#FFA500">0.00 EGP</span></div>
+                    <div class="row"><span class="label" style="color:#a0a0a0">Est. 24/7 (Month)</span><span id="cost_est_month" class="cost" style="color:#gray">0.00 EGP</span></div>
                     <div class="calc-box">
                         <div style="font-weight:bold; color:#E040FB; margin-bottom:10px;">COST CALCULATORS</div>
-                        
-                        <div class="calc-row">
-                            <span style="color:#a0a0a0; font-size:12px; width:60px;">Monthly 24/7</span>
-                            <input id="in_hrs_1" class="calc-input" value="24" oninput="recalc(1)" placeholder="H" style="width:40px;">
-                            <span style="color:gray; margin:0 2px;">x</span>
-                            <input id="in_days_1" class="calc-input" value="30" oninput="recalc(1)" placeholder="D" style="width:40px;">
-                            <span id="calc_res_1" class="calc-res">0.00 EGP</span>
-                        </div>
-
-                        <div class="calc-row">
-                            <span style="color:#00E5FF; font-size:12px; width:60px;">Custom Task</span>
-                            <input id="in_hrs_2" class="calc-input" value="35:25:17" oninput="recalc(2)" placeholder="H" style="width:95px;">
-                            <input id="in_days_2" type="hidden" value="1">
-                            <span id="calc_res_2" class="calc-res">0.00 EGP</span>
-                        </div>
-                        
+                        <div class="calc-row"><span style="color:#a0a0a0; font-size:12px; width:60px;">Monthly 24/7</span><input id="in_hrs_1" class="calc-input" value="24" oninput="recalc(1)" style="width:40px;"><span style="color:gray; margin:0 2px;">x</span><input id="in_days_1" class="calc-input" value="30" oninput="recalc(1)" style="width:40px;"><span id="calc_res_1" class="calc-res">0.00 EGP</span></div>
+                        <div class="calc-row"><span style="color:#00E5FF; font-size:12px; width:60px;">Custom Task</span><input id="in_hrs_2" class="calc-input" value="35:25:17" oninput="recalc(2)" style="width:95px;"><input id="in_days_2" type="hidden" value="1"><span id="calc_res_2" class="calc-res">0.00 EGP</span></div>
                         <span class="calc-sub">Supports "35", "35h", or "20:25:17"</span>
                     </div>
                 </div>
-
                 <script>
-                    let currentWatts = 0;
-                    let price = 0;
-
+                    let currentWatts = 0; let price = 0;
                     async function update() {
                         try {
-                            const res = await fetch('/api/data');
-                            const data = await res.json();
-                            
-                            currentWatts = data.total_w;
-                            price = data.price_per_kwh;
-
+                            const res = await fetch('/api/data'); const data = await res.json();
+                            currentWatts = data.total_w; price = data.price_per_kwh;
                             document.getElementById('total_w').innerText = Math.round(data.total_w) + " W";
-                            document.getElementById('total_w').style.color = data.total_w > 500 ? "#FF4444" : (data.total_w > 300 ? "#FFD700" : "#00E5FF");
                             document.getElementById('peak_w').innerText = "Peak: " + Math.round(data.peak_w) + " W";
-                            
                             document.getElementById('cpu_w').innerText = Math.round(data.cpu_w) + " W";
                             document.getElementById('cpu_stats').innerText = Math.round(data.cpu_t) + " °C | " + Math.round(data.cpu_load) + " %";
-                            
                             document.getElementById('igpu_w').innerText = Math.round(data.igpu_w) + " W";
                             document.getElementById('igpu_stats').innerText = Math.round(data.igpu_t) + " °C | " + Math.round(data.igpu_load) + " %";
-
                             document.getElementById('sys_w').innerText = Math.round(data.sys_w) + " W";
-
                             document.getElementById('cost_session').innerText = data.cost_session.toFixed(4) + " EGP";
                             document.getElementById('cost_today').innerText = data.cost_today.toFixed(4) + " EGP";
                             document.getElementById('cost_overall').innerText = data.cost_overall.toFixed(4) + " EGP";
                             document.getElementById('cost_est_month').innerText = data.cost_est_month.toFixed(2) + " EGP";
-
-                            if (data.alert) {
-                                document.getElementById('cost_today').classList.add("alert");
-                            }
-
-                            const grid = document.getElementById('gpu_grid');
-                            grid.innerHTML = "";
+                            const grid = document.getElementById('gpu_grid'); grid.innerHTML = "";
                             data.gpu_data.forEach(gpu => {
                                 let subText = Math.round(gpu.temp) + " °C | " + Math.round(gpu.load) + " %";
-                                if(gpu.vram_used > 1.0) {
-                                    subText += "<br>VRAM: " + gpu.vram_used.toFixed(1) + " GB";
-                                }
-                                
-                                grid.innerHTML += `
-                                    <div class="card">
-                                        <span class="card-title" style="color:#76b900">${gpu.name}</span>
-                                        <div class="card-val">${Math.round(gpu.power)} W</div>
-                                        <div class="card-temp">${subText}</div>
-                                    </div>
-                                `;
+                                if(gpu.vram_used > 1.0) { subText += "<br>VRAM: " + gpu.vram_used.toFixed(1) + " GB"; }
+                                grid.innerHTML += `<div class="card"><span class="card-title" style="color:#76b900">${gpu.name}</span><div class="card-val">${Math.round(gpu.power)} W</div><div class="card-temp">${subText}</div></div>`;
                             });
-                            
-                            recalc(1);
-                            recalc(2);
-
+                            recalc(1); recalc(2);
                         } catch (e) { console.log(e); }
                     }
-
                     function parseTime(val) {
-                        if (!val) return 0;
-                        val = val.toString().toLowerCase().replace("h", "").trim();
-                        if (val.includes(":")) {
-                            let parts = val.split(":").map(Number);
-                            if (parts.length === 3) return parts[0] + parts[1]/60 + parts[2]/3600;
-                            if (parts.length === 2) return parts[0] + parts[1]/60;
-                            return 0;
-                        }
+                        if (!val) return 0; val = val.toString().toLowerCase().replace("h", "").trim();
+                        if (val.includes(":")) { let parts = val.split(":").map(Number); if (parts.length === 3) return parts[0] + parts[1]/60 + parts[2]/3600; if (parts.length === 2) return parts[0] + parts[1]/60; return 0; }
                         return parseFloat(val) || 0;
                     }
-
                     function recalc(id) {
-                        let valStr = document.getElementById('in_hrs_' + id).value;
-                        let h = parseTime(valStr);
+                        let valStr = document.getElementById('in_hrs_' + id).value; let h = parseTime(valStr);
                         let d = parseFloat(document.getElementById('in_days_' + id).value) || 0;
-                        
                         let cost = (currentWatts / 1000.0) * h * d * price;
                         document.getElementById('calc_res_' + id).innerText = cost.toFixed(2) + " EGP";
                     }
-
-                    setInterval(update, 1000);
-                    update();
-                </script>
-            </body>
-            </html>
-            """)
-
+                    setInterval(update, 1000); update();
+                </script></body></html>""")
         @app.route('/api/data')
-        def data():
-            return jsonify(SHARED_DATA)
-
+        def data(): return jsonify(SHARED_DATA)
         app.run(host='0.0.0.0', port=FLASK_PORT)
 
     # --- MONITORING LOGIC ---
     def setup_nvml(self):
-        if pynvml is None:
-            self.nvml_active = False
-            return
-        try:
-            pynvml.nvmlInit()
-            count = pynvml.nvmlDeviceGetCount()
-            for i in range(count):
-                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
-                name = pynvml.nvmlDeviceGetName(handle)
-                if isinstance(name, bytes): name = name.decode()
-                short_name = name.replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").replace(" RTX", "")
-                self.gpu_data.append({"handle": handle, "name": name, "short": short_name, "widget_pwr": None})
-            self.nvml_active = True
-        except: self.nvml_active = False
+        if pynvml:
+            try:
+                pynvml.nvmlInit()
+                count = pynvml.nvmlDeviceGetCount()
+                for i in range(count):
+                    handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                    name = pynvml.nvmlDeviceGetName(handle)
+                    if isinstance(name, bytes): name = name.decode()
+                    short_name = name.replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").replace(" RTX", "")
+                    self.gpu_data.append({"handle": handle, "name": name, "short": short_name, "widget_pwr": None})
+                self.nvml_active = True
+            except: self.nvml_active = False
+        else: self.nvml_active = False
 
     def load_data(self):
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -573,8 +414,7 @@ class PowerMonitorApp(ctk.CTk):
                 with open(STATE_FILE, 'r') as f:
                     data = json.load(f)
                     if "lifetime_seconds" not in data: data.update({"lifetime_seconds": 0, "day_seconds": 0})
-                    if data.get("last_date") != today_str:
-                        data.update({"last_date": today_str, "day_kwh": 0.0, "day_cost": 0.0, "day_seconds": 0})
+                    if data.get("last_date") != today_str: data.update({"last_date": today_str, "day_kwh": 0.0, "day_cost": 0.0, "day_seconds": 0})
                     return data
             except: pass
         return default
@@ -585,33 +425,25 @@ class PowerMonitorApp(ctk.CTk):
     def init_csv(self):
         headers = ["Timestamp", "Total Watts", "Total Cost", "CPU Temp", "CPU Watts", "CPU Load", "iGPU Temp", "iGPU Watts", "iGPU Load"]
         for i in range(len(self.gpu_data)): headers.extend([f"GPU{i} Temp", f"GPU{i} Watts", f"GPU{i} Load", f"GPU{i} VRAM Used"])
-        
-        should_create = False
         if not os.path.exists(LOG_FILE):
-            should_create = True
+            with open(LOG_FILE, mode='w', newline='') as f: csv.writer(f).writerow(headers)
         else:
             try:
-                with open(LOG_FILE, 'r') as f:
-                    existing_headers = f.readline().strip().split(',')
+                with open(LOG_FILE, 'r') as f: existing_headers = f.readline().strip().split(',')
                 if "GPU0 VRAM Used" not in existing_headers:
                     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                     os.rename(LOG_FILE, f"power_log_backup_{timestamp}.csv")
-                    should_create = True
-            except: 
-                should_create = True
-        
-        if should_create:
-            with open(LOG_FILE, mode='w', newline='') as f: csv.writer(f).writerow(headers)
+                    with open(LOG_FILE, mode='w', newline='') as f: csv.writer(f).writerow(headers)
+            except: pass
 
     def log_to_csv(self, total_w, cpu_t, cpu_w, cpu_l, igpu_t, igpu_w, igpu_l, nv_metrics):
         try:
             row = [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), f"{total_w:.1f}", f"{self.persistent_data['day_cost']:.4f}", 
-                   f"{cpu_t:.1f}", f"{cpu_w:.1f}", f"{cpu_l:.1f}", 
-                   f"{igpu_t:.1f}", f"{igpu_w:.1f}", f"{igpu_l:.1f}"]
+                   f"{cpu_t:.1f}", f"{cpu_w:.1f}", f"{cpu_l:.1f}", f"{igpu_t:.1f}", f"{igpu_w:.1f}", f"{igpu_l:.1f}"]
             for metric in nv_metrics: 
                 row.extend([f"{metric['temp']:.1f}", f"{metric['power']:.1f}", f"{metric['load']:.1f}", f"{metric['vram_used']:.2f}"])
             with open(LOG_FILE, mode='a', newline='') as f: csv.writer(f).writerow(row)
-        except: pass
+        except PermissionError: pass # CRASH PROTECTION: Excel locked file
 
     def fetch_lhm_data(self):
         if not IS_WINDOWS: return None
@@ -641,8 +473,7 @@ class PowerMonitorApp(ctk.CTk):
             nonlocal total
             if isinstance(node, dict):
                 if "Radeon" in node.get("Text", "") or "Generic VGA" in node.get("Text", ""):
-                    total = self.sum_radeon_powers(node)
-                    return True
+                    total = self.sum_radeon_powers(node); return True
                 if "Children" in node:
                     for child in node["Children"]:
                         if scan(child): return True
@@ -650,8 +481,7 @@ class PowerMonitorApp(ctk.CTk):
                 for item in node:
                     if scan(item): return True
             return False
-        scan(data)
-        return total
+        scan(data); return total
 
     def sum_radeon_powers(self, node):
         acc = 0.0
@@ -663,129 +493,76 @@ class PowerMonitorApp(ctk.CTk):
                 acc += self.sum_radeon_powers(child)
         return acc
 
-    def get_color(self, temp):
-        if temp < 60: return "#76b900"
-        if temp < 80: return "#ff8c00"
-        return "#FF4444"
-
-    def format_time(self, seconds):
-        m, s = divmod(int(seconds), 60)
-        h, m = divmod(m, 60)
-        return f"{h:02d}:{m:02d}:{s:02d}"
+    def get_color(self, temp): return "#FF4444" if temp > 80 else ("#ff8c00" if temp > 60 else "#76b900")
+    def format_time(self, seconds): m, s = divmod(int(seconds), 60); h, m = divmod(m, 60); return f"{h:02d}:{m:02d}:{s:02d}"
 
     def background_monitor(self):
         last_save = time.time()
         while self.running:
-            total_nvidia_w = 0
-            nv_metrics = [] 
-            shared_gpu_list = [] 
-
+            total_nvidia_w = 0; nv_metrics = []; shared_gpu_list = []
             real_cpu_load = psutil.cpu_percent(interval=None)
 
             if self.nvml_active:
                 for gpu in self.gpu_data:
                     try: 
-                        w = pynvml.nvmlDeviceGetPowerUsage(gpu['handle']) / 1000.0
-                        total_nvidia_w += w
+                        w = pynvml.nvmlDeviceGetPowerUsage(gpu['handle']) / 1000.0; total_nvidia_w += w
                         t = pynvml.nvmlDeviceGetTemperature(gpu['handle'], 0)
-                        
-                        load_struct = pynvml.nvmlDeviceGetUtilizationRates(gpu['handle'])
-                        l = load_struct.gpu
-                        
+                        l = pynvml.nvmlDeviceGetUtilizationRates(gpu['handle']).gpu
                         mem_info = pynvml.nvmlDeviceGetMemoryInfo(gpu['handle'])
-                        vram_used_gb = mem_info.used / (1024**3)
-                        vram_total_gb = mem_info.total / (1024**3)
-                        
+                        vram_used_gb = mem_info.used / (1024**3); vram_total_gb = mem_info.total / (1024**3)
                         nv_metrics.append({"power": w, "temp": t, "load": l, "vram_used": vram_used_gb})
                         shared_gpu_list.append({"name": gpu['short'], "power": w, "temp": t, "load": l, "vram_used": vram_used_gb})
-                        
                         if gpu['widget_pwr']:
                             status_text = f"{t} °C | {l} %"
-                            if vram_used_gb > 1.0: 
-                                status_text += f"\n{vram_used_gb:.1f} / {vram_total_gb:.1f} GB VRAM"
-                            
+                            if vram_used_gb > 1.0: status_text += f"\n{vram_used_gb:.1f} / {vram_total_gb:.1f} GB VRAM"
                             gpu['widget_temp'].configure(text=status_text, text_color=self.get_color(t))
-                            
-                            ratio = min(1.0, vram_used_gb / vram_total_gb)
-                            gpu['widget_bar'].set(ratio)
+                            gpu['widget_bar'].set(min(1.0, vram_used_gb / vram_total_gb))
                             gpu['widget_pwr'].configure(text=f"{int(w)} W")
-                    except: 
-                        nv_metrics.append({"power": 0, "temp": 0, "load": 0, "vram_used": 0})
+                    except: nv_metrics.append({"power": 0, "temp": 0, "load": 0, "vram_used": 0})
 
             lhm = self.fetch_lhm_data()
-            cpu_w, igpu_w, cpu_t, igpu_t = 0, 0, 0, 0
-            cpu_l, igpu_l = 0, 0
-            is_estimated = False
-            status_msg = "Status: Live Data"
+            cpu_w, igpu_w, cpu_t, igpu_t = 0, 0, 0, 0; cpu_l, igpu_l = 0, 0; is_estimated = False; status_msg = "Status: Live Data"
 
             if lhm:
                 cpu_w = self.find_sensor_value(lhm, ["Package", "CPU Package", "CPU PPT", "CPU Cores"], "Power")
                 igpu_w = self.calculate_igpu_total(lhm)
-                
                 cpu_t = self.find_sensor_value(lhm, ["Core (Tctl/Tdie)", "Package", "Core #1"], "Temperature")
                 igpu_t = self.find_sensor_value(lhm, ["GPU Core", "GPU Temperature"], "Temperature")
-                
                 cpu_l = self.find_sensor_value(lhm, ["Total", "CPU Total"], "Load")
                 igpu_l = self.find_sensor_value(lhm, ["GPU Core", "D3D 3D", "Video Engine"], "Load") 
-                
                 if cpu_w == 0:
-                    is_estimated = True
-                    status_msg = "⚠️ LHM Error (Est. CPU)"
+                    is_estimated = True; status_msg = "⚠️ LHM Error (Est. CPU)"
                     use_load = cpu_l if cpu_l > 0 else real_cpu_load
-                    cpu_w = 25.0 + (use_load * 1.5)
-                    cpu_l = use_load 
+                    cpu_w = 25.0 + (use_load * 1.5); cpu_l = use_load 
             else:
-                is_estimated = True
-                status_msg = "⚠️ LHM Down (Using Estimates)"
-                cpu_l = real_cpu_load
-                cpu_w = 25.0 + (cpu_l * 1.5)
-                igpu_w = 0; igpu_t = 0; igpu_l = 0; cpu_t = 0 
+                is_estimated = True; status_msg = "⚠️ LHM Down (Using Estimates)"
+                cpu_l = real_cpu_load; cpu_w = 25.0 + (cpu_l * 1.5); igpu_w = 0; igpu_t = 0; igpu_l = 0; cpu_t = 0 
             
             total_w = total_nvidia_w + igpu_w + cpu_w + OVERHEAD_WATTS 
             if total_w > self.peak_w: self.peak_w = total_w
 
-            # Metrics
             kwh_inc = (total_w * 1.0) / 3_600_000
             cost_inc = kwh_inc * PRICE_PER_KWH
-            self.session_data["kwh"] += kwh_inc
-            self.session_data["cost"] += cost_inc
-            self.persistent_data["day_kwh"] += kwh_inc
-            self.persistent_data["day_cost"] += cost_inc
-            self.persistent_data["day_seconds"] += 1
-            self.persistent_data["lifetime_kwh"] += kwh_inc
-            self.persistent_data["lifetime_cost"] += cost_inc
-            self.persistent_data["lifetime_seconds"] += 1
+            self.session_data["kwh"] += kwh_inc; self.session_data["cost"] += cost_inc
+            self.persistent_data["day_kwh"] += kwh_inc; self.persistent_data["day_cost"] += cost_inc; self.persistent_data["day_seconds"] += 1
+            self.persistent_data["lifetime_kwh"] += kwh_inc; self.persistent_data["lifetime_cost"] += cost_inc; self.persistent_data["lifetime_seconds"] += 1
 
             if datetime.now().strftime("%Y-%m-%d") != self.persistent_data["last_date"]:
                 self.persistent_data.update({"last_date": datetime.now().strftime("%Y-%m-%d"), "day_kwh": 0.0, "day_cost": 0.0, "day_seconds": 0})
 
-            # CALC MONTHLY ESTIMATE (Fixed 24/7 for JSON API)
             est_cost_month = (total_w / 1000.0) * 24.0 * 30.0 * PRICE_PER_KWH
 
-            # SHARED DATA
-            SHARED_DATA["total_w"] = total_w
-            SHARED_DATA["peak_w"] = self.peak_w
-            SHARED_DATA["cpu_w"] = cpu_w
-            SHARED_DATA["cpu_t"] = cpu_t
-            SHARED_DATA["cpu_load"] = cpu_l
-            SHARED_DATA["igpu_w"] = igpu_w
-            SHARED_DATA["igpu_t"] = igpu_t
-            SHARED_DATA["igpu_load"] = igpu_l
-            SHARED_DATA["sys_w"] = OVERHEAD_WATTS
-            SHARED_DATA["gpu_data"] = shared_gpu_list
-            SHARED_DATA["cost_session"] = self.session_data["cost"]
-            SHARED_DATA["cost_today"] = self.persistent_data["day_cost"]
-            SHARED_DATA["cost_overall"] = self.persistent_data["lifetime_cost"]
-            SHARED_DATA["cost_est_month"] = est_cost_month
-            SHARED_DATA["alert"] = self.persistent_data["day_cost"] > DAILY_LIMIT_EGP
-            SHARED_DATA["price_per_kwh"] = PRICE_PER_KWH 
+            SHARED_DATA["total_w"] = total_w; SHARED_DATA["peak_w"] = self.peak_w
+            SHARED_DATA["cpu_w"] = cpu_w; SHARED_DATA["cpu_t"] = cpu_t; SHARED_DATA["cpu_load"] = cpu_l
+            SHARED_DATA["igpu_w"] = igpu_w; SHARED_DATA["igpu_t"] = igpu_t; SHARED_DATA["igpu_load"] = igpu_l
+            SHARED_DATA["sys_w"] = OVERHEAD_WATTS; SHARED_DATA["gpu_data"] = shared_gpu_list
+            SHARED_DATA["cost_session"] = self.session_data["cost"]; SHARED_DATA["cost_today"] = self.persistent_data["day_cost"]
+            SHARED_DATA["cost_overall"] = self.persistent_data["lifetime_cost"]; SHARED_DATA["cost_est_month"] = est_cost_month
+            SHARED_DATA["alert"] = self.persistent_data["day_cost"] > DAILY_LIMIT_EGP; SHARED_DATA["price_per_kwh"] = PRICE_PER_KWH 
 
-            # UI Update
             try:
                 self.update_chart_data(total_w)
-                self.lbl_watts.configure(text=f"{int(total_w)} W")
-                self.lbl_peak.configure(text=f"Peak: {int(self.peak_w)} W")
-                
+                self.lbl_watts.configure(text=f"{int(total_w)} W"); self.lbl_peak.configure(text=f"Peak: {int(self.peak_w)} W")
                 if total_w > 500: self.lbl_watts.configure(text_color=COLOR_CRIT)
                 elif total_w > 300: self.lbl_watts.configure(text_color=COLOR_WARN)
                 else: self.lbl_watts.configure(text_color=COLOR_ACCENT)
@@ -801,36 +578,23 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_session_time.configure(text=self.format_time(time.time() - self.start_time))
                 self.lbl_session_cost.configure(text=f"{self.session_data['cost']:.4f}")
                 self.lbl_session_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
-                
                 self.lbl_today_time.configure(text=self.format_time(self.persistent_data["day_seconds"]))
                 self.lbl_today_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
                 self.lbl_today_kwh.configure(text=f"{self.persistent_data['day_kwh']:.4f} kWh")
-                
                 self.lbl_overall_time.configure(text=self.format_time(self.persistent_data["lifetime_seconds"]))
                 self.lbl_overall_cost.configure(text=f"{self.persistent_data['lifetime_cost']:.4f}")
                 self.lbl_overall_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
 
                 if self.persistent_data["day_cost"] > DAILY_LIMIT_EGP:
-                    self.lbl_today_cost.configure(text_color=COLOR_CRIT)
-                    self.lbl_status.configure(text="⚠️ DAILY BUDGET EXCEEDED ⚠️" if int(time.time())%2==0 else f"Limit: {DAILY_LIMIT_EGP} EGP", text_color=COLOR_CRIT)
+                    self.lbl_today_cost.configure(text_color=COLOR_CRIT); self.lbl_status.configure(text="⚠️ DAILY BUDGET EXCEEDED ⚠️" if int(time.time())%2==0 else f"Limit: {DAILY_LIMIT_EGP} EGP", text_color=COLOR_CRIT)
                 else:
-                    self.lbl_today_cost.configure(text_color="#00FF00")
-                    self.lbl_status.configure(text=status_msg, text_color="gray")
+                    self.lbl_today_cost.configure(text_color="#00FF00"); self.lbl_status.configure(text=status_msg, text_color="gray")
             except: pass
 
             self.log_to_csv(total_w, cpu_t, cpu_w, cpu_l, igpu_t, igpu_w, igpu_l, nv_metrics)
-            
-            if time.time() - last_save > 60:
-                self.save_data()
-                last_save = time.time()
-                
+            if time.time() - last_save > 60: self.save_data(); last_save = time.time()
             time.sleep(CSV_LOG_INTERVAL)
 
-    def on_close(self):
-        self.running = False
-        self.save_data()
-        self.destroy()
+    def on_close(self): self.running = False; self.save_data(); self.destroy()
 
-if __name__ == "__main__":
-    app = PowerMonitorApp()
-    app.mainloop()
+if __name__ == "__main__": app = PowerMonitorApp(); app.mainloop()
