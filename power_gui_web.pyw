@@ -28,28 +28,26 @@ matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-# --- CONFIGURATION ---
-PRICE_PER_KWH = 2.14          
-DAILY_LIMIT_EGP = 10.00       
+# --- CONFIGURATION DEFAULTS ---
+DEFAULT_PRICE = 2.14          
+DEFAULT_LIMIT = 10.00       
 STATE_FILE = "power_state.json"
 LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
 FLASK_PORT = 5000
-CSV_LOG_INTERVAL = 1  # <--- CHANGE THIS to 5 or 10 to log less often!
-OVERHEAD_WATTS = 80   # MSI X870 + AIO Overhead
 
 # --- SHARED DATA ---
 SHARED_DATA = {
     "total_w": 0, "peak_w": 0,
     "cpu_w": 0, "cpu_t": 0, "cpu_load": 0,
     "igpu_w": 0, "igpu_t": 0, "igpu_load": 0,
-    "sys_w": OVERHEAD_WATTS,
+    "sys_w": 80, # Default
     "gpu_data": [], 
     "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0, 
     "cost_est_month": 0.0,
     "time_session": "00:00:00",
     "alert": False,
-    "price_per_kwh": PRICE_PER_KWH
+    "price_per_kwh": DEFAULT_PRICE
 }
 
 # --- THEME COLORS ---
@@ -83,24 +81,32 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
+        # 1. Hardware Init
         self.gpu_data = [] 
         self.nvml_active = False
         self.setup_nvml()
         
+        # Window Calculation
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title(f"⚡ Power Monitor (Bulletproof V39)")
-        self.geometry(f"{window_width}x1050") 
+        self.title(f"⚡ Power Monitor (V40 Configurator)")
+        self.geometry(f"{window_width}x1100") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
+        # 2. Data Init
         self.running = True
         self.start_time = time.time()
         self.peak_w = 0 
         self.session_data = {"kwh": 0.0, "cost": 0.0}
         self.persistent_data = self.load_data()
         
+        # DYNAMIC SETTINGS
+        self.cfg_overhead = 80.0
+        self.cfg_interval = 1
+        
+        # Graph Data
         self.history_x = deque(maxlen=60)
         self.history_y = deque(maxlen=60)
         for i in range(60): 
@@ -111,6 +117,8 @@ class PowerMonitorApp(ctk.CTk):
         self.init_csv()
 
         # --- UI LAYOUT ---
+        
+        # A. HEADER
         self.frame_header = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_header.pack(pady=(15, 5), fill="x")
         
@@ -123,7 +131,7 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_peak = ctk.CTkLabel(self.frame_header, text="Peak: 0 W", font=("Arial", 11), text_color="gray")
         self.lbl_peak.pack(pady=(0, 0))
 
-        # HARDWARE CARDS
+        # B. HARDWARE CARDS
         self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_hw.pack(pady=10, padx=20, fill="x")
         self.frame_hw.grid_columnconfigure(0, weight=1)
@@ -153,19 +161,19 @@ class PowerMonitorApp(ctk.CTk):
         
         self.card_sys = self.create_metric_card(self.frame_hw, "System (Misc)", COLOR_SYS, TDP_SYS)
         self.card_sys['frame'].grid(row=0, column=col_idx, padx=8)
-        self.card_sys['lbl_val'].configure(text=f"{OVERHEAD_WATTS} W")
+        self.card_sys['lbl_val'].configure(text=f"{int(self.cfg_overhead)} W")
         self.card_sys['lbl_temp'].configure(text="Mobo/Ram/Fans")
-        self.card_sys['bar'].set(OVERHEAD_WATTS / TDP_SYS)
+        self.card_sys['bar'].set(self.cfg_overhead / TDP_SYS)
         col_idx += 1
         
         self.frame_hw.grid_columnconfigure(col_idx, weight=1)
 
-        # LIVE CHART
+        # C. LIVE CHART
         self.frame_chart = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=12, height=200)
         self.frame_chart.pack(pady=10, padx=25, fill="x")
         self.setup_chart()
 
-        # STATS PANEL
+        # D. STATS PANEL
         self.frame_stats = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=12)
         self.frame_stats.pack(pady=10, padx=25, fill="x", ipadx=15, ipady=5)
         self.frame_stats.grid_columnconfigure(0, weight=1)
@@ -185,13 +193,33 @@ class PowerMonitorApp(ctk.CTk):
         
         ctk.CTkFrame(self.frame_stats, height=2, fg_color="#404040").grid(row=4, column=0, columnspan=4, sticky="ew", pady=10)
 
-        # CALCULATORS
-        calc_font = ("Arial", 11, "bold")
-        ctk.CTkLabel(self.frame_stats, text="COST ESTIMATORS", font=calc_font, text_color="#E040FB").grid(row=5, column=0, pady=(5,0), sticky="w")
+        # E. SETTINGS (NEW)
+        ctk.CTkLabel(self.frame_stats, text="LIVE CONFIGURATION", font=("Arial", 11, "bold"), text_color="gray").grid(row=5, column=0, pady=(5,0), sticky="w")
+        
+        self.frame_config = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
+        self.frame_config.grid(row=6, column=0, columnspan=4, sticky="ew", pady=2)
+        
+        ctk.CTkLabel(self.frame_config, text="Overhead (W):", text_color="gray", width=90, anchor="w").pack(side="left")
+        self.entry_overhead = ctk.CTkEntry(self.frame_config, width=50, height=25, justify="center")
+        self.entry_overhead.pack(side="left")
+        self.entry_overhead.insert(0, "80")
+        
+        ctk.CTkLabel(self.frame_config, text="Log (s):", text_color="gray", width=60, anchor="e").pack(side="left", padx=5)
+        self.entry_interval = ctk.CTkEntry(self.frame_config, width=40, height=25, justify="center")
+        self.entry_interval.pack(side="left")
+        self.entry_interval.insert(0, "1")
+        
+        self.btn_apply = ctk.CTkButton(self.frame_config, text="Apply", width=60, height=25, fg_color="#404040", hover_color="#606060", command=self.apply_config)
+        self.btn_apply.pack(side="left", padx=15)
+
+        ctk.CTkFrame(self.frame_stats, height=2, fg_color="#404040").grid(row=7, column=0, columnspan=4, sticky="ew", pady=10)
+
+        # F. CALCULATORS SECTION
+        ctk.CTkLabel(self.frame_stats, text="COST ESTIMATORS", font=("Arial", 11, "bold"), text_color="#E040FB").grid(row=8, column=0, pady=(5,0), sticky="w")
         
         # CALC 1
         self.frame_calc1 = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        self.frame_calc1.grid(row=6, column=0, columnspan=4, sticky="ew", pady=2)
+        self.frame_calc1.grid(row=9, column=0, columnspan=4, sticky="ew", pady=2)
         ctk.CTkLabel(self.frame_calc1, text="Monthly 24/7:", text_color="#a0a0a0", width=90, anchor="w").pack(side="left")
         self.entry_hours_1 = ctk.CTkEntry(self.frame_calc1, width=40, height=25, justify="center"); self.entry_hours_1.pack(side="left"); self.entry_hours_1.insert(0, "24")
         ctk.CTkLabel(self.frame_calc1, text="h/d x", text_color="gray").pack(side="left", padx=5)
@@ -204,7 +232,7 @@ class PowerMonitorApp(ctk.CTk):
 
         # CALC 2
         self.frame_calc2 = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
-        self.frame_calc2.grid(row=7, column=0, columnspan=4, sticky="ew", pady=2)
+        self.frame_calc2.grid(row=10, column=0, columnspan=4, sticky="ew", pady=2)
         ctk.CTkLabel(self.frame_calc2, text="Custom Task:", text_color="#00E5FF", width=90, anchor="w").pack(side="left")
         self.entry_hours_2 = ctk.CTkEntry(self.frame_calc2, width=80, height=25, justify="center"); self.entry_hours_2.pack(side="left"); self.entry_hours_2.insert(0, "35:25:17") 
         ctk.CTkLabel(self.frame_calc2, text="(Duration)", text_color="gray").pack(side="left", padx=5)
@@ -214,28 +242,50 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_calc_result_2 = ctk.CTkLabel(self.frame_calc2, text="---", font=("Arial", 13, "bold"), text_color=COLOR_TEXT_MAIN)
         self.lbl_calc_result_2.pack(side="left")
 
-        # FOOTER
+        # G. FOOTER
         self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
         self.frame_footer.pack(side="bottom", pady=10, fill="x")
+
         self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack()
+        
         ips = self.get_all_ips()
-        if not ips: ctk.CTkLabel(self.frame_footer, text="No Network Found", text_color="gray").pack()
+        if not ips:
+             ctk.CTkLabel(self.frame_footer, text="No Network Found", text_color="gray").pack()
         else:
             for ip in ips:
                 link = f"http://{ip}:{FLASK_PORT}"
                 label_text = f"☁️ Tailscale: {link}" if ip.startswith("100.") else f"🏠 Home LAN: {link}"
                 color = "#E040FB" if ip.startswith("100.") else COLOR_ACCENT
+                
                 lbl = ctk.CTkLabel(self.frame_footer, text=label_text, text_color=color, font=("Arial", 12, "bold"), cursor="hand2")
                 lbl.pack(pady=2)
                 lbl.bind("<Button-1>", lambda e, url=link: webbrowser.open(url))
 
-        # THREADS
+        # H. THREADS
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
         self.monitor_thread.start()
+        
         self.flask_thread = threading.Thread(target=self.run_flask_server, daemon=True)
         self.flask_thread.start()
+        
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def apply_config(self):
+        try:
+            w = float(self.entry_overhead.get())
+            i = int(self.entry_interval.get())
+            if i < 1: i = 1
+            
+            self.cfg_overhead = w
+            self.cfg_interval = i
+            
+            SHARED_DATA["sys_w"] = w
+            self.card_sys['lbl_val'].configure(text=f"{int(w)} W")
+            self.card_sys['bar'].set(min(1.0, w / TDP_SYS))
+            self.lbl_status.configure(text=f"Updated: Overhead {int(w)}W, Log {i}s", text_color="#00FF00")
+        except ValueError:
+            self.lbl_status.configure(text="Invalid Config Input", text_color="red")
 
     def parse_time_input(self, val_str):
         val_str = val_str.lower().replace("h", "").strip()
@@ -257,29 +307,45 @@ class PowerMonitorApp(ctk.CTk):
             h = self.parse_time_input(h_entry.get())
             d = float(d_entry.get())
             w = SHARED_DATA["total_w"]
-            cost = (w / 1000.0) * h * d * PRICE_PER_KWH
+            cost = (w / 1000.0) * h * d * DEFAULT_PRICE
             res_lbl.configure(text=f"{cost:.2f} EGP")
         except ValueError:
             pass
 
     def get_all_ips(self):
         ip_list = []
-        try: hostname = socket.gethostname(); ip_list = [ip for ip in socket.gethostbyname_ex(hostname)[2] if not ip.startswith("127.")]
+        try:
+            hostname = socket.gethostname()
+            for ip in socket.gethostbyname_ex(hostname)[2]:
+                if not ip.startswith("127."):
+                    ip_list.append(ip)
         except: pass
-        try: s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(("8.8.8.8", 80)); main_ip = s.getsockname()[0]; s.close(); ip_list.insert(0, main_ip) if main_ip not in ip_list else None
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            main_ip = s.getsockname()[0]
+            s.close()
+            if main_ip not in ip_list:
+                ip_list.insert(0, main_ip)
         except: pass
         return list(dict.fromkeys(ip_list))
 
     def setup_chart(self):
-        self.fig = Figure(figsize=(5, 2), dpi=100); self.fig.patch.set_facecolor(COLOR_CARD)
-        self.ax = self.fig.add_subplot(111); self.ax.set_facecolor(COLOR_CARD)
+        self.fig = Figure(figsize=(5, 2), dpi=100)
+        self.fig.patch.set_facecolor(COLOR_CARD)
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_facecolor(COLOR_CARD)
         self.line, = self.ax.plot([], [], color=COLOR_ACCENT, linewidth=2)
         self.ax.grid(True, color="#404040", linestyle='--', linewidth=0.5)
-        for spine in self.ax.spines.values(): spine.set_visible(False)
-        self.ax.spines['bottom'].set_visible(True); self.ax.spines['bottom'].set_color('#404040')
-        self.ax.spines['left'].set_visible(True); self.ax.spines['left'].set_color('#404040')
-        self.ax.tick_params(axis='x', colors='gray', labelsize=8); self.ax.tick_params(axis='y', colors='gray', labelsize=8)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_chart); self.canvas.draw(); self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
+        self.ax.spines['top'].set_visible(False)
+        self.ax.spines['right'].set_visible(False)
+        self.ax.spines['bottom'].set_color('#404040')
+        self.ax.spines['left'].set_color('#404040')
+        self.ax.tick_params(axis='x', colors='gray', labelsize=8)
+        self.ax.tick_params(axis='y', colors='gray', labelsize=8)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_chart)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
 
     def update_chart_data(self, new_val):
         self.history_y.append(new_val)
@@ -289,23 +355,34 @@ class PowerMonitorApp(ctk.CTk):
         self.canvas.draw()
 
     def create_metric_card(self, parent, title, title_color, max_val_estimate):
-        frame = ctk.CTkFrame(parent, width=155, height=140, fg_color=COLOR_CARD, corner_radius=10); frame.pack_propagate(False)
+        frame = ctk.CTkFrame(parent, width=155, height=140, fg_color=COLOR_CARD, corner_radius=10)
+        frame.pack_propagate(False)
         ctk.CTkLabel(frame, text=title, font=("Arial", 11, "bold"), text_color=title_color).pack(pady=(12, 2))
-        lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 24, "bold"), text_color=COLOR_TEXT_MAIN); lbl_val.pack(pady=0)
-        bar = ctk.CTkProgressBar(frame, width=100, height=6, progress_color=title_color); bar.set(0); bar.pack(pady=(5, 5))
-        lbl_temp = ctk.CTkLabel(frame, text="-- °C | -- %", font=("Arial", 11), text_color=COLOR_TEXT_SUB); lbl_temp.pack(pady=(0, 10))
+        lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 24, "bold"), text_color=COLOR_TEXT_MAIN)
+        lbl_val.pack(pady=0)
+        bar = ctk.CTkProgressBar(frame, width=100, height=6, progress_color=title_color)
+        bar.set(0)
+        bar.pack(pady=(5, 5))
+        lbl_temp = ctk.CTkLabel(frame, text="-- °C | -- %", font=("Arial", 11), text_color=COLOR_TEXT_SUB)
+        lbl_temp.pack(pady=(0, 10))
         return {"frame": frame, "lbl_val": lbl_val, "lbl_temp": lbl_temp, "bar": bar, "max": max_val_estimate}
 
     def create_stat_row(self, row_idx, label_text, color):
         ctk.CTkLabel(self.frame_stats, text=f"{label_text}:", font=("Arial", 13), text_color=COLOR_TEXT_MAIN).grid(row=row_idx, column=0, pady=5, sticky="w")
-        lbl_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 15, "bold"), text_color=color); lbl_cost.grid(row=row_idx, column=1, pady=5, sticky="e")
-        lbl_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12), text_color=COLOR_TEXT_MAIN); lbl_kwh.grid(row=row_idx, column=2, pady=5, sticky="e")
-        lbl_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color=COLOR_TEXT_SUB); lbl_time.grid(row=row_idx, column=3, pady=5, sticky="e")
-        setattr(self, f"lbl_{label_text.lower()}_cost", lbl_cost); setattr(self, f"lbl_{label_text.lower()}_kwh", lbl_kwh); setattr(self, f"lbl_{label_text.lower()}_time", lbl_time)
+        lbl_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 15, "bold"), text_color=color)
+        lbl_cost.grid(row=row_idx, column=1, pady=5, sticky="e")
+        lbl_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12), text_color=COLOR_TEXT_MAIN)
+        lbl_kwh.grid(row=row_idx, column=2, pady=5, sticky="e")
+        lbl_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color=COLOR_TEXT_SUB)
+        lbl_time.grid(row=row_idx, column=3, pady=5, sticky="e")
+        setattr(self, f"lbl_{label_text.lower()}_cost", lbl_cost)
+        setattr(self, f"lbl_{label_text.lower()}_kwh", lbl_kwh)
+        setattr(self, f"lbl_{label_text.lower()}_time", lbl_time)
 
     # --- FLASK SERVER ---
     def run_flask_server(self):
         app = Flask(__name__)
+
         @app.route('/')
         def index():
             return render_template_string("""
@@ -443,7 +520,7 @@ class PowerMonitorApp(ctk.CTk):
             for metric in nv_metrics: 
                 row.extend([f"{metric['temp']:.1f}", f"{metric['power']:.1f}", f"{metric['load']:.1f}", f"{metric['vram_used']:.2f}"])
             with open(LOG_FILE, mode='a', newline='') as f: csv.writer(f).writerow(row)
-        except PermissionError: pass # CRASH PROTECTION: Excel locked file
+        except PermissionError: pass
 
     def fetch_lhm_data(self):
         if not IS_WINDOWS: return None
@@ -538,11 +615,11 @@ class PowerMonitorApp(ctk.CTk):
                 is_estimated = True; status_msg = "⚠️ LHM Down (Using Estimates)"
                 cpu_l = real_cpu_load; cpu_w = 25.0 + (cpu_l * 1.5); igpu_w = 0; igpu_t = 0; igpu_l = 0; cpu_t = 0 
             
-            total_w = total_nvidia_w + igpu_w + cpu_w + OVERHEAD_WATTS 
+            total_w = total_nvidia_w + igpu_w + cpu_w + self.cfg_overhead
             if total_w > self.peak_w: self.peak_w = total_w
 
             kwh_inc = (total_w * 1.0) / 3_600_000
-            cost_inc = kwh_inc * PRICE_PER_KWH
+            cost_inc = kwh_inc * DEFAULT_PRICE
             self.session_data["kwh"] += kwh_inc; self.session_data["cost"] += cost_inc
             self.persistent_data["day_kwh"] += kwh_inc; self.persistent_data["day_cost"] += cost_inc; self.persistent_data["day_seconds"] += 1
             self.persistent_data["lifetime_kwh"] += kwh_inc; self.persistent_data["lifetime_cost"] += cost_inc; self.persistent_data["lifetime_seconds"] += 1
@@ -550,15 +627,15 @@ class PowerMonitorApp(ctk.CTk):
             if datetime.now().strftime("%Y-%m-%d") != self.persistent_data["last_date"]:
                 self.persistent_data.update({"last_date": datetime.now().strftime("%Y-%m-%d"), "day_kwh": 0.0, "day_cost": 0.0, "day_seconds": 0})
 
-            est_cost_month = (total_w / 1000.0) * 24.0 * 30.0 * PRICE_PER_KWH
+            est_cost_month = (total_w / 1000.0) * 24.0 * 30.0 * DEFAULT_PRICE
 
             SHARED_DATA["total_w"] = total_w; SHARED_DATA["peak_w"] = self.peak_w
             SHARED_DATA["cpu_w"] = cpu_w; SHARED_DATA["cpu_t"] = cpu_t; SHARED_DATA["cpu_load"] = cpu_l
             SHARED_DATA["igpu_w"] = igpu_w; SHARED_DATA["igpu_t"] = igpu_t; SHARED_DATA["igpu_load"] = igpu_l
-            SHARED_DATA["sys_w"] = OVERHEAD_WATTS; SHARED_DATA["gpu_data"] = shared_gpu_list
+            SHARED_DATA["sys_w"] = self.cfg_overhead; SHARED_DATA["gpu_data"] = shared_gpu_list
             SHARED_DATA["cost_session"] = self.session_data["cost"]; SHARED_DATA["cost_today"] = self.persistent_data["day_cost"]
             SHARED_DATA["cost_overall"] = self.persistent_data["lifetime_cost"]; SHARED_DATA["cost_est_month"] = est_cost_month
-            SHARED_DATA["alert"] = self.persistent_data["day_cost"] > DAILY_LIMIT_EGP; SHARED_DATA["price_per_kwh"] = PRICE_PER_KWH 
+            SHARED_DATA["alert"] = self.persistent_data["day_cost"] > DAILY_LIMIT_EGP; SHARED_DATA["price_per_kwh"] = DEFAULT_PRICE
 
             try:
                 self.update_chart_data(total_w)
@@ -578,9 +655,11 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_session_time.configure(text=self.format_time(time.time() - self.start_time))
                 self.lbl_session_cost.configure(text=f"{self.session_data['cost']:.4f}")
                 self.lbl_session_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
+                
                 self.lbl_today_time.configure(text=self.format_time(self.persistent_data["day_seconds"]))
                 self.lbl_today_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
                 self.lbl_today_kwh.configure(text=f"{self.persistent_data['day_kwh']:.4f} kWh")
+                
                 self.lbl_overall_time.configure(text=self.format_time(self.persistent_data["lifetime_seconds"]))
                 self.lbl_overall_cost.configure(text=f"{self.persistent_data['lifetime_cost']:.4f}")
                 self.lbl_overall_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
@@ -593,7 +672,7 @@ class PowerMonitorApp(ctk.CTk):
 
             self.log_to_csv(total_w, cpu_t, cpu_w, cpu_l, igpu_t, igpu_w, igpu_l, nv_metrics)
             if time.time() - last_save > 60: self.save_data(); last_save = time.time()
-            time.sleep(CSV_LOG_INTERVAL)
+            time.sleep(self.cfg_interval)
 
     def on_close(self): self.running = False; self.save_data(); self.destroy()
 
