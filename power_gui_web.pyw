@@ -30,7 +30,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # --- CONFIGURATION DEFAULTS ---
 DEFAULT_PRICE = 2.14          
-DEFAULT_LIMIT = 10.00       
+DEFAULT_LIMIT = 50.00  # <--- Increased Default to 50 EGP
 STATE_FILE = "power_state.json"
 LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
@@ -41,13 +41,14 @@ SHARED_DATA = {
     "total_w": 0, "peak_w": 0,
     "cpu_w": 0, "cpu_t": 0, "cpu_load": 0,
     "igpu_w": 0, "igpu_t": 0, "igpu_load": 0,
-    "sys_w": 80, # Default
+    "sys_w": 80, 
     "gpu_data": [], 
     "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0, 
     "cost_est_month": 0.0,
     "time_session": "00:00:00",
     "alert": False,
-    "price_per_kwh": DEFAULT_PRICE
+    "price_per_kwh": DEFAULT_PRICE,
+    "daily_limit": DEFAULT_LIMIT # Shared for Web
 }
 
 # --- THEME COLORS ---
@@ -90,7 +91,7 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title(f"⚡ Power Monitor (V40 Configurator)")
+        self.title(f"⚡ Power Monitor (V41 Budget Control)")
         self.geometry(f"{window_width}x1100") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -105,6 +106,7 @@ class PowerMonitorApp(ctk.CTk):
         # DYNAMIC SETTINGS
         self.cfg_overhead = 80.0
         self.cfg_interval = 1
+        self.cfg_limit = DEFAULT_LIMIT
         
         # Graph Data
         self.history_x = deque(maxlen=60)
@@ -193,28 +195,36 @@ class PowerMonitorApp(ctk.CTk):
         
         ctk.CTkFrame(self.frame_stats, height=2, fg_color="#404040").grid(row=4, column=0, columnspan=4, sticky="ew", pady=10)
 
-        # E. SETTINGS (NEW)
+        # E. LIVE CONFIGURATION
         ctk.CTkLabel(self.frame_stats, text="LIVE CONFIGURATION", font=("Arial", 11, "bold"), text_color="gray").grid(row=5, column=0, pady=(5,0), sticky="w")
         
         self.frame_config = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
         self.frame_config.grid(row=6, column=0, columnspan=4, sticky="ew", pady=2)
         
-        ctk.CTkLabel(self.frame_config, text="Overhead (W):", text_color="gray", width=90, anchor="w").pack(side="left")
-        self.entry_overhead = ctk.CTkEntry(self.frame_config, width=50, height=25, justify="center")
-        self.entry_overhead.pack(side="left")
+        # Overhead Input
+        ctk.CTkLabel(self.frame_config, text="Overhead (W):", text_color="gray").pack(side="left")
+        self.entry_overhead = ctk.CTkEntry(self.frame_config, width=40, height=25, justify="center")
+        self.entry_overhead.pack(side="left", padx=5)
         self.entry_overhead.insert(0, "80")
         
-        ctk.CTkLabel(self.frame_config, text="Log (s):", text_color="gray", width=60, anchor="e").pack(side="left", padx=5)
-        self.entry_interval = ctk.CTkEntry(self.frame_config, width=40, height=25, justify="center")
-        self.entry_interval.pack(side="left")
+        # Limit Input (NEW)
+        ctk.CTkLabel(self.frame_config, text="Limit (EGP):", text_color="gray").pack(side="left", padx=(10,0))
+        self.entry_limit = ctk.CTkEntry(self.frame_config, width=40, height=25, justify="center")
+        self.entry_limit.pack(side="left", padx=5)
+        self.entry_limit.insert(0, str(int(DEFAULT_LIMIT)))
+
+        # Interval Input
+        ctk.CTkLabel(self.frame_config, text="Log (s):", text_color="gray").pack(side="left", padx=(10,0))
+        self.entry_interval = ctk.CTkEntry(self.frame_config, width=30, height=25, justify="center")
+        self.entry_interval.pack(side="left", padx=5)
         self.entry_interval.insert(0, "1")
         
-        self.btn_apply = ctk.CTkButton(self.frame_config, text="Apply", width=60, height=25, fg_color="#404040", hover_color="#606060", command=self.apply_config)
+        self.btn_apply = ctk.CTkButton(self.frame_config, text="Apply", width=50, height=25, fg_color="#404040", hover_color="#606060", command=self.apply_config)
         self.btn_apply.pack(side="left", padx=15)
 
         ctk.CTkFrame(self.frame_stats, height=2, fg_color="#404040").grid(row=7, column=0, columnspan=4, sticky="ew", pady=10)
 
-        # F. CALCULATORS SECTION
+        # F. CALCULATORS
         ctk.CTkLabel(self.frame_stats, text="COST ESTIMATORS", font=("Arial", 11, "bold"), text_color="#E040FB").grid(row=8, column=0, pady=(5,0), sticky="w")
         
         # CALC 1
@@ -274,16 +284,20 @@ class PowerMonitorApp(ctk.CTk):
     def apply_config(self):
         try:
             w = float(self.entry_overhead.get())
+            limit = float(self.entry_limit.get())
             i = int(self.entry_interval.get())
             if i < 1: i = 1
             
             self.cfg_overhead = w
             self.cfg_interval = i
+            self.cfg_limit = limit
             
             SHARED_DATA["sys_w"] = w
+            SHARED_DATA["daily_limit"] = limit
+            
             self.card_sys['lbl_val'].configure(text=f"{int(w)} W")
             self.card_sys['bar'].set(min(1.0, w / TDP_SYS))
-            self.lbl_status.configure(text=f"Updated: Overhead {int(w)}W, Log {i}s", text_color="#00FF00")
+            self.lbl_status.configure(text=f"Settings Saved: Limit {limit} EGP", text_color="#00FF00")
         except ValueError:
             self.lbl_status.configure(text="Invalid Config Input", text_color="red")
 
@@ -441,6 +455,14 @@ class PowerMonitorApp(ctk.CTk):
                             document.getElementById('cost_today').innerText = data.cost_today.toFixed(4) + " EGP";
                             document.getElementById('cost_overall').innerText = data.cost_overall.toFixed(4) + " EGP";
                             document.getElementById('cost_est_month').innerText = data.cost_est_month.toFixed(2) + " EGP";
+                            
+                            // Check alert using SHARED DATA's daily limit
+                            if (data.cost_today > data.daily_limit) {
+                                document.getElementById('cost_today').classList.add("alert");
+                            } else {
+                                document.getElementById('cost_today').classList.remove("alert");
+                            }
+
                             const grid = document.getElementById('gpu_grid'); grid.innerHTML = "";
                             data.gpu_data.forEach(gpu => {
                                 let subText = Math.round(gpu.temp) + " °C | " + Math.round(gpu.load) + " %";
@@ -635,7 +657,7 @@ class PowerMonitorApp(ctk.CTk):
             SHARED_DATA["sys_w"] = self.cfg_overhead; SHARED_DATA["gpu_data"] = shared_gpu_list
             SHARED_DATA["cost_session"] = self.session_data["cost"]; SHARED_DATA["cost_today"] = self.persistent_data["day_cost"]
             SHARED_DATA["cost_overall"] = self.persistent_data["lifetime_cost"]; SHARED_DATA["cost_est_month"] = est_cost_month
-            SHARED_DATA["alert"] = self.persistent_data["day_cost"] > DAILY_LIMIT_EGP; SHARED_DATA["price_per_kwh"] = DEFAULT_PRICE
+            SHARED_DATA["alert"] = self.persistent_data["day_cost"] > self.cfg_limit; SHARED_DATA["price_per_kwh"] = DEFAULT_PRICE; SHARED_DATA["daily_limit"] = self.cfg_limit
 
             try:
                 self.update_chart_data(total_w)
@@ -655,17 +677,15 @@ class PowerMonitorApp(ctk.CTk):
                 self.lbl_session_time.configure(text=self.format_time(time.time() - self.start_time))
                 self.lbl_session_cost.configure(text=f"{self.session_data['cost']:.4f}")
                 self.lbl_session_kwh.configure(text=f"{self.session_data['kwh']:.4f} kWh")
-                
                 self.lbl_today_time.configure(text=self.format_time(self.persistent_data["day_seconds"]))
                 self.lbl_today_cost.configure(text=f"{self.persistent_data['day_cost']:.4f}")
                 self.lbl_today_kwh.configure(text=f"{self.persistent_data['day_kwh']:.4f} kWh")
-                
                 self.lbl_overall_time.configure(text=self.format_time(self.persistent_data["lifetime_seconds"]))
                 self.lbl_overall_cost.configure(text=f"{self.persistent_data['lifetime_cost']:.4f}")
                 self.lbl_overall_kwh.configure(text=f"{self.persistent_data['lifetime_kwh']:.4f} kWh")
 
-                if self.persistent_data["day_cost"] > DAILY_LIMIT_EGP:
-                    self.lbl_today_cost.configure(text_color=COLOR_CRIT); self.lbl_status.configure(text="⚠️ DAILY BUDGET EXCEEDED ⚠️" if int(time.time())%2==0 else f"Limit: {DAILY_LIMIT_EGP} EGP", text_color=COLOR_CRIT)
+                if self.persistent_data["day_cost"] > self.cfg_limit:
+                    self.lbl_today_cost.configure(text_color=COLOR_CRIT); self.lbl_status.configure(text="⚠️ DAILY BUDGET EXCEEDED ⚠️" if int(time.time())%2==0 else f"Limit: {self.cfg_limit} EGP", text_color=COLOR_CRIT)
                 else:
                     self.lbl_today_cost.configure(text_color="#00FF00"); self.lbl_status.configure(text=status_msg, text_color="gray")
             except: pass
