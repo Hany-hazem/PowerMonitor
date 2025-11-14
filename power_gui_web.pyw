@@ -30,7 +30,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # --- CONFIGURATION DEFAULTS ---
 DEFAULT_PRICE = 2.14          
-DEFAULT_LIMIT = 50.00  # <--- Increased Default to 50 EGP
+DEFAULT_LIMIT = 50.00
 STATE_FILE = "power_state.json"
 LOG_FILE = "power_log.csv"
 LHM_URL = "http://localhost:8085/data.json"
@@ -48,7 +48,7 @@ SHARED_DATA = {
     "time_session": "00:00:00",
     "alert": False,
     "price_per_kwh": DEFAULT_PRICE,
-    "daily_limit": DEFAULT_LIMIT # Shared for Web
+    "daily_limit": DEFAULT_LIMIT
 }
 
 # --- THEME COLORS ---
@@ -91,8 +91,8 @@ class PowerMonitorApp(ctk.CTk):
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title(f"⚡ Power Monitor (V41 Budget Control)")
-        self.geometry(f"{window_width}x1100") 
+        self.title(f"⚡ Power Monitor (V42 Space Saver)")
+        self.geometry(f"{window_width}x1150") # Taller window
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
@@ -118,10 +118,14 @@ class PowerMonitorApp(ctk.CTk):
         self.save_data()
         self.init_csv()
 
-        # --- UI LAYOUT ---
+        # --- UI LAYOUT (Improved) ---
         
+        # 1. MAIN SCROLLABLE FRAME
+        self.main_scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.main_scroll.pack(fill="both", expand=True, padx=0, pady=0)
+
         # A. HEADER
-        self.frame_header = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_header = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_header.pack(pady=(15, 5), fill="x")
         
         self.lbl_title = ctk.CTkLabel(self.frame_header, text="SYSTEM POWER DRAW", font=("Roboto Medium", 12), text_color=COLOR_TEXT_SUB)
@@ -134,7 +138,7 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_peak.pack(pady=(0, 0))
 
         # B. HARDWARE CARDS
-        self.frame_hw = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_hw = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_hw.pack(pady=10, padx=20, fill="x")
         self.frame_hw.grid_columnconfigure(0, weight=1)
         col_idx = 1
@@ -171,12 +175,12 @@ class PowerMonitorApp(ctk.CTk):
         self.frame_hw.grid_columnconfigure(col_idx, weight=1)
 
         # C. LIVE CHART
-        self.frame_chart = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=12, height=200)
+        self.frame_chart = ctk.CTkFrame(self.main_scroll, fg_color=COLOR_CARD, corner_radius=12, height=200)
         self.frame_chart.pack(pady=10, padx=25, fill="x")
         self.setup_chart()
 
         # D. STATS PANEL
-        self.frame_stats = ctk.CTkFrame(self, fg_color=COLOR_CARD, corner_radius=12)
+        self.frame_stats = ctk.CTkFrame(self.main_scroll, fg_color=COLOR_CARD, corner_radius=12)
         self.frame_stats.pack(pady=10, padx=25, fill="x", ipadx=15, ipady=5)
         self.frame_stats.grid_columnconfigure(0, weight=1)
         self.frame_stats.grid_columnconfigure(1, weight=1)
@@ -201,19 +205,16 @@ class PowerMonitorApp(ctk.CTk):
         self.frame_config = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
         self.frame_config.grid(row=6, column=0, columnspan=4, sticky="ew", pady=2)
         
-        # Overhead Input
         ctk.CTkLabel(self.frame_config, text="Overhead (W):", text_color="gray").pack(side="left")
         self.entry_overhead = ctk.CTkEntry(self.frame_config, width=40, height=25, justify="center")
         self.entry_overhead.pack(side="left", padx=5)
         self.entry_overhead.insert(0, "80")
         
-        # Limit Input (NEW)
         ctk.CTkLabel(self.frame_config, text="Limit (EGP):", text_color="gray").pack(side="left", padx=(10,0))
         self.entry_limit = ctk.CTkEntry(self.frame_config, width=40, height=25, justify="center")
         self.entry_limit.pack(side="left", padx=5)
         self.entry_limit.insert(0, str(int(DEFAULT_LIMIT)))
 
-        # Interval Input
         ctk.CTkLabel(self.frame_config, text="Log (s):", text_color="gray").pack(side="left", padx=(10,0))
         self.entry_interval = ctk.CTkEntry(self.frame_config, width=30, height=25, justify="center")
         self.entry_interval.pack(side="left", padx=5)
@@ -252,9 +253,9 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_calc_result_2 = ctk.CTkLabel(self.frame_calc2, text="---", font=("Arial", 13, "bold"), text_color=COLOR_TEXT_MAIN)
         self.lbl_calc_result_2.pack(side="left")
 
-        # G. FOOTER
-        self.frame_footer = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_footer.pack(side="bottom", pady=10, fill="x")
+        # G. FOOTER (Fixed at Bottom of Scroll Frame)
+        self.frame_footer = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
+        self.frame_footer.pack(pady=20, fill="x")
 
         self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack()
