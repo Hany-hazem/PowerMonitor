@@ -9,6 +9,7 @@ import webbrowser
 import requests
 import psutil
 import platform
+import subprocess
 from datetime import datetime
 from collections import deque
 
@@ -61,7 +62,7 @@ COLOR_WARN = "#FFD700"
 COLOR_CRIT = "#FF4444"      
 COLOR_SYS = "#9E9E9E"       
 
-# --- ESTIMATED TDP ---
+# --- ESTIMATED TDP (Fallbacks) ---
 TDP_NVIDIA_HIGH = 285 
 TDP_NVIDIA_MID = 120  
 TDP_CPU = 170         
@@ -86,13 +87,14 @@ class PowerMonitorApp(ctk.CTk):
         self.gpu_data = [] 
         self.nvml_active = False
         self.setup_nvml()
+        self.detected_cpu_name = self.detect_cpu_name() # <--- NEW AUTO DETECT
         
         # Window Calculation
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title(f"⚡ Power Monitor (V42 Space Saver)")
-        self.geometry(f"{window_width}x1150") # Taller window
+        self.title(f"⚡ Power Monitor (V43 Auto-Detect)")
+        self.geometry(f"{window_width}x1150") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
@@ -118,7 +120,7 @@ class PowerMonitorApp(ctk.CTk):
         self.save_data()
         self.init_csv()
 
-        # --- UI LAYOUT (Improved) ---
+        # --- UI LAYOUT ---
         
         # 1. MAIN SCROLLABLE FRAME
         self.main_scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -161,7 +163,8 @@ class PowerMonitorApp(ctk.CTk):
         self.card_igpu['frame'].grid(row=0, column=col_idx, padx=8)
         col_idx += 1
 
-        self.card_cpu = self.create_metric_card(self.frame_hw, "Ryzen 9900X", "#ff8c00", TDP_CPU)
+        # CPU CARD (Uses Auto-Detected Name)
+        self.card_cpu = self.create_metric_card(self.frame_hw, self.detected_cpu_name, "#ff8c00", TDP_CPU)
         self.card_cpu['frame'].grid(row=0, column=col_idx, padx=8)
         col_idx += 1
         
@@ -253,7 +256,7 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_calc_result_2 = ctk.CTkLabel(self.frame_calc2, text="---", font=("Arial", 13, "bold"), text_color=COLOR_TEXT_MAIN)
         self.lbl_calc_result_2.pack(side="left")
 
-        # G. FOOTER (Fixed at Bottom of Scroll Frame)
+        # G. FOOTER
         self.frame_footer = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_footer.pack(pady=20, fill="x")
 
@@ -281,6 +284,26 @@ class PowerMonitorApp(ctk.CTk):
         self.flask_thread.start()
         
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # --- NEW: AUTO DETECT CPU NAME ---
+    def detect_cpu_name(self):
+        try:
+            if platform.system() == "Windows":
+                # Get the clean name from registry/wmic
+                name = subprocess.check_output("wmic cpu get name", shell=True).decode().split('\n')[1].strip()
+                # Shorten it if it's too long
+                name = name.replace("12-Core Processor", "").replace("Processor", "").replace("CPU", "").strip()
+                return name if name else "Unknown CPU"
+            elif platform.system() == "Darwin": # Mac
+                return subprocess.check_output(["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"]).decode().strip()
+            elif platform.system() == "Linux":
+                with open("/proc/cpuinfo", "r") as f:
+                    for line in f:
+                        if "model name" in line:
+                            return line.split(":")[1].strip()
+            return platform.processor()
+        except:
+            return "Generic CPU"
 
     def apply_config(self):
         try:
