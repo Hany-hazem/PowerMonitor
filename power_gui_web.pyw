@@ -10,11 +10,14 @@ import requests
 import psutil
 import platform
 import subprocess
+import warnings
 from datetime import datetime
 from collections import deque
 
 # --- SAFE IMPORTS (Universal Compatibility) ---
 try:
+    # Filter deprecation warnings from pynvml
+    warnings.filterwarnings("ignore", category=FutureWarning)
     import pynvml
 except ImportError:
     pynvml = None 
@@ -87,13 +90,13 @@ class PowerMonitorApp(ctk.CTk):
         self.gpu_data = [] 
         self.nvml_active = False
         self.setup_nvml()
-        self.detected_cpu_name = self.detect_cpu_name() # <--- NEW AUTO DETECT
+        self.detected_cpu_name = self.detect_cpu_name() 
         
         # Window Calculation
         extra_width = max(0, (len(self.gpu_data)) * 160) 
         window_width = 850 + extra_width
         
-        self.title(f"⚡ Power Monitor (V43 Auto-Detect)")
+        self.title(f"⚡ Power Monitor (V44 Win11 Ready)")
         self.geometry(f"{window_width}x1150") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
@@ -163,7 +166,6 @@ class PowerMonitorApp(ctk.CTk):
         self.card_igpu['frame'].grid(row=0, column=col_idx, padx=8)
         col_idx += 1
 
-        # CPU CARD (Uses Auto-Detected Name)
         self.card_cpu = self.create_metric_card(self.frame_hw, self.detected_cpu_name, "#ff8c00", TDP_CPU)
         self.card_cpu['frame'].grid(row=0, column=col_idx, padx=8)
         col_idx += 1
@@ -285,23 +287,29 @@ class PowerMonitorApp(ctk.CTk):
         
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    # --- NEW: AUTO DETECT CPU NAME ---
+    # --- UPDATED: WIN11 SAFE AUTO DETECT ---
     def detect_cpu_name(self):
         try:
             if platform.system() == "Windows":
-                # Get the clean name from registry/wmic
-                name = subprocess.check_output("wmic cpu get name", shell=True).decode().split('\n')[1].strip()
-                # Shorten it if it's too long
-                name = name.replace("12-Core Processor", "").replace("Processor", "").replace("CPU", "").strip()
-                return name if name else "Unknown CPU"
-            elif platform.system() == "Darwin": # Mac
+                try:
+                    import winreg
+                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+                    name = winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
+                    # Clean up Intel/AMD Names
+                    name = name.replace("Intel(R) Core(TM) ", "").replace("AMD Ryzen ", "Ryzen ")
+                    name = name.replace(" Processor", "").replace(" 12-Core", "")
+                    return name
+                except:
+                    # Fallback if Registry fails (Rare)
+                    return platform.processor()
+            elif platform.system() == "Darwin":
                 return subprocess.check_output(["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"]).decode().strip()
             elif platform.system() == "Linux":
                 with open("/proc/cpuinfo", "r") as f:
                     for line in f:
                         if "model name" in line:
                             return line.split(":")[1].strip()
-            return platform.processor()
+            return "Generic CPU"
         except:
             return "Generic CPU"
 
