@@ -14,15 +14,14 @@ import warnings
 from datetime import datetime
 from collections import deque
 
-# --- SAFE IMPORTS (Universal Compatibility) ---
+# --- SAFE IMPORTS ---
 try:
-    # Filter deprecation warnings from pynvml
     warnings.filterwarnings("ignore", category=FutureWarning)
     import pynvml
 except ImportError:
     pynvml = None 
 
-# --- FLASK (WEB SERVER) ---
+# --- FLASK ---
 from flask import Flask, jsonify, render_template_string
 import logging
 
@@ -32,7 +31,7 @@ matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-# --- CONFIGURATION DEFAULTS ---
+# --- CONFIGURATION ---
 DEFAULT_PRICE = 2.14          
 DEFAULT_LIMIT = 50.00
 STATE_FILE = "power_state.json"
@@ -45,7 +44,7 @@ SHARED_DATA = {
     "total_w": 0, "peak_w": 0,
     "cpu_w": 0, "cpu_t": 0, "cpu_load": 0,
     "igpu_w": 0, "igpu_t": 0, "igpu_load": 0,
-    "sys_w": 80, 
+    "sys_w": 40, # Default lower for laptops
     "gpu_data": [], 
     "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0, 
     "cost_est_month": 0.0,
@@ -55,7 +54,7 @@ SHARED_DATA = {
     "daily_limit": DEFAULT_LIMIT
 }
 
-# --- THEME COLORS ---
+# --- THEME ---
 COLOR_BG = "#1a1a1a"
 COLOR_CARD = "#2b2b2b"
 COLOR_TEXT_MAIN = "#ffffff"
@@ -65,14 +64,11 @@ COLOR_WARN = "#FFD700"
 COLOR_CRIT = "#FF4444"      
 COLOR_SYS = "#9E9E9E"       
 
-# --- ESTIMATED TDP (Fallbacks) ---
-TDP_NVIDIA_HIGH = 285 
-TDP_NVIDIA_MID = 120  
-TDP_CPU = 170         
-TDP_IGPU = 60         
-TDP_SYS = 150         
+# --- TDP ESTIMATES ---
+TDP_CPU = 100         
+TDP_IGPU = 45         
+TDP_SYS = 100         
 
-# OS DETECTION
 IS_WINDOWS = platform.system() == "Windows"
 
 os.environ["PATH"] += os.pathsep + os.getcwd()
@@ -86,34 +82,35 @@ class PowerMonitorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        # 1. Hardware Init
+        # 1. Hardware Discovery
         self.gpu_data = [] 
         self.nvml_active = False
-        self.setup_nvml()
-        self.detected_cpu_name = self.detect_cpu_name() 
+        self.setup_nvml() # Finds NVIDIA GPUs
+        self.detected_cpu_name = self.detect_cpu_name()
         
-        # Window Calculation
-        extra_width = max(0, (len(self.gpu_data)) * 160) 
-        window_width = 850 + extra_width
+        # 2. Dynamic Size Calculation
+        # Base width (Stats) + (160px per hardware card)
+        # Cards = GPUs + CPU + System + iGPU (always assumed present for safety)
+        num_cards = len(self.gpu_data) + 3 
+        window_width = max(850, num_cards * 160 + 50)
         
-        self.title(f"⚡ Power Monitor (V44 Win11 Ready)")
+        self.title(f"⚡ Power Monitor (V45 Adaptive)")
         self.geometry(f"{window_width}x1150") 
         self.configure(fg_color=COLOR_BG)
         self.resizable(True, True)
 
-        # 2. Data Init
+        # 3. Data Init
         self.running = True
         self.start_time = time.time()
         self.peak_w = 0 
         self.session_data = {"kwh": 0.0, "cost": 0.0}
         self.persistent_data = self.load_data()
         
-        # DYNAMIC SETTINGS
-        self.cfg_overhead = 80.0
+        # Dynamic Settings
+        self.cfg_overhead = 80.0 if len(self.gpu_data) > 0 else 40.0 # Less overhead if no dGPU
         self.cfg_interval = 1
         self.cfg_limit = DEFAULT_LIMIT
         
-        # Graph Data
         self.history_x = deque(maxlen=60)
         self.history_y = deque(maxlen=60)
         for i in range(60): 
@@ -124,73 +121,65 @@ class PowerMonitorApp(ctk.CTk):
         self.init_csv()
 
         # --- UI LAYOUT ---
-        
-        # 1. MAIN SCROLLABLE FRAME
         self.main_scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.main_scroll.pack(fill="both", expand=True, padx=0, pady=0)
+        self.main_scroll.pack(fill="both", expand=True)
 
-        # A. HEADER
+        # Header
         self.frame_header = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_header.pack(pady=(15, 5), fill="x")
-        
         self.lbl_title = ctk.CTkLabel(self.frame_header, text="SYSTEM POWER DRAW", font=("Roboto Medium", 12), text_color=COLOR_TEXT_SUB)
-        self.lbl_title.pack(pady=(0, 0))
-
+        self.lbl_title.pack()
         self.lbl_watts = ctk.CTkLabel(self.frame_header, text="--- W", font=("Roboto", 64, "bold"), text_color=COLOR_ACCENT)
-        self.lbl_watts.pack(pady=0)
-        
+        self.lbl_watts.pack()
         self.lbl_peak = ctk.CTkLabel(self.frame_header, text="Peak: 0 W", font=("Arial", 11), text_color="gray")
-        self.lbl_peak.pack(pady=(0, 0))
+        self.lbl_peak.pack()
 
-        # B. HARDWARE CARDS
+        # Hardware Grid (Dynamic)
         self.frame_hw = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_hw.pack(pady=10, padx=20, fill="x")
-        self.frame_hw.grid_columnconfigure(0, weight=1)
-        col_idx = 1
         
+        col_idx = 0
+        # 1. NVIDIA GPUs (If any)
         if self.nvml_active:
             for i, gpu in enumerate(self.gpu_data):
-                short_name = gpu['name'].replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").replace(" RTX", "")
-                est_max = TDP_NVIDIA_HIGH if "4070" in short_name or "3080" in short_name else TDP_NVIDIA_MID
-                
-                card = self.create_metric_card(self.frame_hw, short_name, "#76b900", est_max)
-                card['frame'].grid(row=0, column=col_idx, padx=8)
-                
+                card = self.create_metric_card(self.frame_hw, gpu['short'], "#76b900", 250) # Generic max 250W
+                card['frame'].grid(row=0, column=col_idx, padx=5)
                 self.gpu_data[i]['widget_pwr'] = card['lbl_val']
                 self.gpu_data[i]['widget_temp'] = card['lbl_temp']
                 self.gpu_data[i]['widget_bar'] = card['bar']
-                self.gpu_data[i]['max_w'] = est_max
+                self.gpu_data[i]['max_w'] = 250 
                 col_idx += 1
 
-        self.card_igpu = self.create_metric_card(self.frame_hw, "iGPU (Radeon)", "#E040FB", TDP_IGPU)
-        self.card_igpu['frame'].grid(row=0, column=col_idx, padx=8)
+        # 2. iGPU (Always show, might be 0W)
+        self.card_igpu = self.create_metric_card(self.frame_hw, "iGPU (Integrated)", "#E040FB", TDP_IGPU)
+        self.card_igpu['frame'].grid(row=0, column=col_idx, padx=5)
         col_idx += 1
 
+        # 3. CPU (Auto Detected)
         self.card_cpu = self.create_metric_card(self.frame_hw, self.detected_cpu_name, "#ff8c00", TDP_CPU)
-        self.card_cpu['frame'].grid(row=0, column=col_idx, padx=8)
+        self.card_cpu['frame'].grid(row=0, column=col_idx, padx=5)
         col_idx += 1
         
+        # 4. System Overhead
         self.card_sys = self.create_metric_card(self.frame_hw, "System (Misc)", COLOR_SYS, TDP_SYS)
-        self.card_sys['frame'].grid(row=0, column=col_idx, padx=8)
+        self.card_sys['frame'].grid(row=0, column=col_idx, padx=5)
         self.card_sys['lbl_val'].configure(text=f"{int(self.cfg_overhead)} W")
         self.card_sys['lbl_temp'].configure(text="Mobo/Ram/Fans")
         self.card_sys['bar'].set(self.cfg_overhead / TDP_SYS)
-        col_idx += 1
         
-        self.frame_hw.grid_columnconfigure(col_idx, weight=1)
+        # Center the grid
+        for i in range(col_idx + 1):
+            self.frame_hw.grid_columnconfigure(i, weight=1)
 
-        # C. LIVE CHART
+        # Chart
         self.frame_chart = ctk.CTkFrame(self.main_scroll, fg_color=COLOR_CARD, corner_radius=12, height=200)
         self.frame_chart.pack(pady=10, padx=25, fill="x")
         self.setup_chart()
 
-        # D. STATS PANEL
+        # Stats
         self.frame_stats = ctk.CTkFrame(self.main_scroll, fg_color=COLOR_CARD, corner_radius=12)
         self.frame_stats.pack(pady=10, padx=25, fill="x", ipadx=15, ipady=5)
-        self.frame_stats.grid_columnconfigure(0, weight=1)
-        self.frame_stats.grid_columnconfigure(1, weight=1)
-        self.frame_stats.grid_columnconfigure(2, weight=1)
-        self.frame_stats.grid_columnconfigure(3, weight=1)
+        self.frame_stats.grid_columnconfigure((0,1,2,3), weight=1)
 
         h_font = ("Arial", 10, "bold")
         ctk.CTkLabel(self.frame_stats, text="TIMELINE", font=h_font, text_color=COLOR_TEXT_SUB).grid(row=0, column=0, pady=10, sticky="w")
@@ -204,16 +193,15 @@ class PowerMonitorApp(ctk.CTk):
         
         ctk.CTkFrame(self.frame_stats, height=2, fg_color="#404040").grid(row=4, column=0, columnspan=4, sticky="ew", pady=10)
 
-        # E. LIVE CONFIGURATION
+        # Config Row
         ctk.CTkLabel(self.frame_stats, text="LIVE CONFIGURATION", font=("Arial", 11, "bold"), text_color="gray").grid(row=5, column=0, pady=(5,0), sticky="w")
-        
         self.frame_config = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
         self.frame_config.grid(row=6, column=0, columnspan=4, sticky="ew", pady=2)
         
         ctk.CTkLabel(self.frame_config, text="Overhead (W):", text_color="gray").pack(side="left")
         self.entry_overhead = ctk.CTkEntry(self.frame_config, width=40, height=25, justify="center")
         self.entry_overhead.pack(side="left", padx=5)
-        self.entry_overhead.insert(0, "80")
+        self.entry_overhead.insert(0, str(int(self.cfg_overhead)))
         
         ctk.CTkLabel(self.frame_config, text="Limit (EGP):", text_color="gray").pack(side="left", padx=(10,0))
         self.entry_limit = ctk.CTkEntry(self.frame_config, width=40, height=25, justify="center")
@@ -230,10 +218,9 @@ class PowerMonitorApp(ctk.CTk):
 
         ctk.CTkFrame(self.frame_stats, height=2, fg_color="#404040").grid(row=7, column=0, columnspan=4, sticky="ew", pady=10)
 
-        # F. CALCULATORS
+        # Calculators
         ctk.CTkLabel(self.frame_stats, text="COST ESTIMATORS", font=("Arial", 11, "bold"), text_color="#E040FB").grid(row=8, column=0, pady=(5,0), sticky="w")
         
-        # CALC 1
         self.frame_calc1 = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
         self.frame_calc1.grid(row=9, column=0, columnspan=4, sticky="ew", pady=2)
         ctk.CTkLabel(self.frame_calc1, text="Monthly 24/7:", text_color="#a0a0a0", width=90, anchor="w").pack(side="left")
@@ -246,7 +233,6 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_calc_result_1 = ctk.CTkLabel(self.frame_calc1, text="---", font=("Arial", 13, "bold"), text_color=COLOR_TEXT_MAIN)
         self.lbl_calc_result_1.pack(side="left")
 
-        # CALC 2
         self.frame_calc2 = ctk.CTkFrame(self.frame_stats, fg_color="transparent")
         self.frame_calc2.grid(row=10, column=0, columnspan=4, sticky="ew", pady=2)
         ctk.CTkLabel(self.frame_calc2, text="Custom Task:", text_color="#00E5FF", width=90, anchor="w").pack(side="left")
@@ -258,60 +244,46 @@ class PowerMonitorApp(ctk.CTk):
         self.lbl_calc_result_2 = ctk.CTkLabel(self.frame_calc2, text="---", font=("Arial", 13, "bold"), text_color=COLOR_TEXT_MAIN)
         self.lbl_calc_result_2.pack(side="left")
 
-        # G. FOOTER
+        # Footer
         self.frame_footer = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_footer.pack(pady=20, fill="x")
-
         self.lbl_status = ctk.CTkLabel(self.frame_footer, text="Initializing...", text_color="gray", font=("Arial", 11))
         self.lbl_status.pack()
-        
         ips = self.get_all_ips()
-        if not ips:
-             ctk.CTkLabel(self.frame_footer, text="No Network Found", text_color="gray").pack()
+        if not ips: ctk.CTkLabel(self.frame_footer, text="No Network Found", text_color="gray").pack()
         else:
             for ip in ips:
                 link = f"http://{ip}:{FLASK_PORT}"
                 label_text = f"☁️ Tailscale: {link}" if ip.startswith("100.") else f"🏠 Home LAN: {link}"
                 color = "#E040FB" if ip.startswith("100.") else COLOR_ACCENT
-                
                 lbl = ctk.CTkLabel(self.frame_footer, text=label_text, text_color=color, font=("Arial", 12, "bold"), cursor="hand2")
                 lbl.pack(pady=2)
                 lbl.bind("<Button-1>", lambda e, url=link: webbrowser.open(url))
 
-        # H. THREADS
+        # Threads
         self.monitor_thread = threading.Thread(target=self.background_monitor, daemon=True)
         self.monitor_thread.start()
-        
         self.flask_thread = threading.Thread(target=self.run_flask_server, daemon=True)
         self.flask_thread.start()
-        
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    # --- UPDATED: WIN11 SAFE AUTO DETECT ---
     def detect_cpu_name(self):
         try:
             if platform.system() == "Windows":
-                try:
-                    import winreg
-                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
-                    name = winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
-                    # Clean up Intel/AMD Names
-                    name = name.replace("Intel(R) Core(TM) ", "").replace("AMD Ryzen ", "Ryzen ")
-                    name = name.replace(" Processor", "").replace(" 12-Core", "")
-                    return name
-                except:
-                    # Fallback if Registry fails (Rare)
-                    return platform.processor()
+                import winreg
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+                name = winreg.QueryValueEx(key, "ProcessorNameString")[0].strip()
+                name = name.replace("Intel(R) Core(TM) ", "").replace("AMD Ryzen ", "Ryzen ")
+                name = name.replace(" Processor", "").replace(" 12-Core", "")
+                return name
             elif platform.system() == "Darwin":
                 return subprocess.check_output(["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"]).decode().strip()
             elif platform.system() == "Linux":
                 with open("/proc/cpuinfo", "r") as f:
                     for line in f:
-                        if "model name" in line:
-                            return line.split(":")[1].strip()
+                        if "model name" in line: return line.split(":")[1].strip()
             return "Generic CPU"
-        except:
-            return "Generic CPU"
+        except: return "Generic CPU"
 
     def apply_config(self):
         try:
@@ -319,19 +291,12 @@ class PowerMonitorApp(ctk.CTk):
             limit = float(self.entry_limit.get())
             i = int(self.entry_interval.get())
             if i < 1: i = 1
-            
-            self.cfg_overhead = w
-            self.cfg_interval = i
-            self.cfg_limit = limit
-            
-            SHARED_DATA["sys_w"] = w
-            SHARED_DATA["daily_limit"] = limit
-            
+            self.cfg_overhead = w; self.cfg_interval = i; self.cfg_limit = limit
+            SHARED_DATA["sys_w"] = w; SHARED_DATA["daily_limit"] = limit
             self.card_sys['lbl_val'].configure(text=f"{int(w)} W")
             self.card_sys['bar'].set(min(1.0, w / TDP_SYS))
             self.lbl_status.configure(text=f"Settings Saved: Limit {limit} EGP", text_color="#00FF00")
-        except ValueError:
-            self.lbl_status.configure(text="Invalid Config Input", text_color="red")
+        except ValueError: self.lbl_status.configure(text="Invalid Config Input", text_color="red")
 
     def parse_time_input(self, val_str):
         val_str = val_str.lower().replace("h", "").strip()
@@ -349,49 +314,31 @@ class PowerMonitorApp(ctk.CTk):
             h_entry = self.entry_hours_1 if calc_id == 1 else self.entry_hours_2
             d_entry = self.entry_days_1 if calc_id == 1 else self.entry_days_2
             res_lbl = self.lbl_calc_result_1 if calc_id == 1 else self.lbl_calc_result_2
-            
             h = self.parse_time_input(h_entry.get())
             d = float(d_entry.get())
             w = SHARED_DATA["total_w"]
             cost = (w / 1000.0) * h * d * DEFAULT_PRICE
             res_lbl.configure(text=f"{cost:.2f} EGP")
-        except ValueError:
-            pass
+        except ValueError: pass
 
     def get_all_ips(self):
         ip_list = []
-        try:
-            hostname = socket.gethostname()
-            for ip in socket.gethostbyname_ex(hostname)[2]:
-                if not ip.startswith("127."):
-                    ip_list.append(ip)
+        try: hostname = socket.gethostname(); ip_list = [ip for ip in socket.gethostbyname_ex(hostname)[2] if not ip.startswith("127.")]
         except: pass
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            main_ip = s.getsockname()[0]
-            s.close()
-            if main_ip not in ip_list:
-                ip_list.insert(0, main_ip)
+        try: s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.connect(("8.8.8.8", 80)); main_ip = s.getsockname()[0]; s.close(); ip_list.insert(0, main_ip) if main_ip not in ip_list else None
         except: pass
         return list(dict.fromkeys(ip_list))
 
     def setup_chart(self):
-        self.fig = Figure(figsize=(5, 2), dpi=100)
-        self.fig.patch.set_facecolor(COLOR_CARD)
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_facecolor(COLOR_CARD)
+        self.fig = Figure(figsize=(5, 2), dpi=100); self.fig.patch.set_facecolor(COLOR_CARD)
+        self.ax = self.fig.add_subplot(111); self.ax.set_facecolor(COLOR_CARD)
         self.line, = self.ax.plot([], [], color=COLOR_ACCENT, linewidth=2)
         self.ax.grid(True, color="#404040", linestyle='--', linewidth=0.5)
-        self.ax.spines['top'].set_visible(False)
-        self.ax.spines['right'].set_visible(False)
-        self.ax.spines['bottom'].set_color('#404040')
-        self.ax.spines['left'].set_color('#404040')
-        self.ax.tick_params(axis='x', colors='gray', labelsize=8)
-        self.ax.tick_params(axis='y', colors='gray', labelsize=8)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_chart)
-        self.canvas.draw()
-        self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
+        for spine in self.ax.spines.values(): spine.set_visible(False)
+        self.ax.spines['bottom'].set_visible(True); self.ax.spines['bottom'].set_color('#404040')
+        self.ax.spines['left'].set_visible(True); self.ax.spines['left'].set_color('#404040')
+        self.ax.tick_params(axis='x', colors='gray', labelsize=8); self.ax.tick_params(axis='y', colors='gray', labelsize=8)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.frame_chart); self.canvas.draw(); self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=5, pady=5)
 
     def update_chart_data(self, new_val):
         self.history_y.append(new_val)
@@ -401,34 +348,23 @@ class PowerMonitorApp(ctk.CTk):
         self.canvas.draw()
 
     def create_metric_card(self, parent, title, title_color, max_val_estimate):
-        frame = ctk.CTkFrame(parent, width=155, height=140, fg_color=COLOR_CARD, corner_radius=10)
-        frame.pack_propagate(False)
+        frame = ctk.CTkFrame(parent, width=155, height=140, fg_color=COLOR_CARD, corner_radius=10); frame.pack_propagate(False)
         ctk.CTkLabel(frame, text=title, font=("Arial", 11, "bold"), text_color=title_color).pack(pady=(12, 2))
-        lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 24, "bold"), text_color=COLOR_TEXT_MAIN)
-        lbl_val.pack(pady=0)
-        bar = ctk.CTkProgressBar(frame, width=100, height=6, progress_color=title_color)
-        bar.set(0)
-        bar.pack(pady=(5, 5))
-        lbl_temp = ctk.CTkLabel(frame, text="-- °C | -- %", font=("Arial", 11), text_color=COLOR_TEXT_SUB)
-        lbl_temp.pack(pady=(0, 10))
+        lbl_val = ctk.CTkLabel(frame, text="0 W", font=("Roboto", 24, "bold"), text_color=COLOR_TEXT_MAIN); lbl_val.pack(pady=0)
+        bar = ctk.CTkProgressBar(frame, width=100, height=6, progress_color=title_color); bar.set(0); bar.pack(pady=(5, 5))
+        lbl_temp = ctk.CTkLabel(frame, text="-- °C | -- %", font=("Arial", 11), text_color=COLOR_TEXT_SUB); lbl_temp.pack(pady=(0, 10))
         return {"frame": frame, "lbl_val": lbl_val, "lbl_temp": lbl_temp, "bar": bar, "max": max_val_estimate}
 
     def create_stat_row(self, row_idx, label_text, color):
         ctk.CTkLabel(self.frame_stats, text=f"{label_text}:", font=("Arial", 13), text_color=COLOR_TEXT_MAIN).grid(row=row_idx, column=0, pady=5, sticky="w")
-        lbl_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 15, "bold"), text_color=color)
-        lbl_cost.grid(row=row_idx, column=1, pady=5, sticky="e")
-        lbl_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12), text_color=COLOR_TEXT_MAIN)
-        lbl_kwh.grid(row=row_idx, column=2, pady=5, sticky="e")
-        lbl_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color=COLOR_TEXT_SUB)
-        lbl_time.grid(row=row_idx, column=3, pady=5, sticky="e")
-        setattr(self, f"lbl_{label_text.lower()}_cost", lbl_cost)
-        setattr(self, f"lbl_{label_text.lower()}_kwh", lbl_kwh)
-        setattr(self, f"lbl_{label_text.lower()}_time", lbl_time)
+        lbl_cost = ctk.CTkLabel(self.frame_stats, text="0.00", font=("Arial", 15, "bold"), text_color=color); lbl_cost.grid(row=row_idx, column=1, pady=5, sticky="e")
+        lbl_kwh = ctk.CTkLabel(self.frame_stats, text="0.000 kWh", font=("Arial", 12), text_color=COLOR_TEXT_MAIN); lbl_kwh.grid(row=row_idx, column=2, pady=5, sticky="e")
+        lbl_time = ctk.CTkLabel(self.frame_stats, text="00:00:00", font=("Arial", 12), text_color=COLOR_TEXT_SUB); lbl_time.grid(row=row_idx, column=3, pady=5, sticky="e")
+        setattr(self, f"lbl_{label_text.lower()}_cost", lbl_cost); setattr(self, f"lbl_{label_text.lower()}_kwh", lbl_kwh); setattr(self, f"lbl_{label_text.lower()}_time", lbl_time)
 
     # --- FLASK SERVER ---
     def run_flask_server(self):
         app = Flask(__name__)
-
         @app.route('/')
         def index():
             return render_template_string("""
@@ -438,8 +374,8 @@ class PowerMonitorApp(ctk.CTk):
                     h1 { margin-bottom: 5px; color: #a0a0a0; font-size: 16px; }
                     .watts { font-size: 60px; font-weight: bold; color: #00E5FF; margin: 0; }
                     .peak { color: gray; font-size: 14px; margin-bottom: 20px; }
-                    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
-                    .card { background: #2b2b2b; padding: 15px; border-radius: 10px; }
+                    .grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-bottom: 20px; }
+                    .card { background: #2b2b2b; padding: 15px; border-radius: 10px; width: 150px; }
                     .card-title { font-size: 12px; font-weight: bold; margin-bottom: 5px; display: block; }
                     .card-val { font-size: 22px; font-weight: bold; }
                     .card-temp { font-size: 11px; color: #a0a0a0; margin-top:5px; line-height: 1.4; }
@@ -453,11 +389,6 @@ class PowerMonitorApp(ctk.CTk):
                 </style></head><body>
                 <h1>SYSTEM POWER DRAW</h1><div id="total_w" class="watts">--- W</div><div id="peak_w" class="peak">Peak: --- W</div>
                 <div class="grid" id="gpu_grid"></div>
-                <div class="grid">
-                     <div class="card"><span class="card-title" style="color:#E040FB">iGPU (Radeon)</span><div id="igpu_w" class="card-val">0 W</div><div id="igpu_stats" class="card-temp">-- °C | -- %</div></div>
-                     <div class="card"><span class="card-title" style="color:#ff8c00">Ryzen 9900X</span><div id="cpu_w" class="card-val">0 W</div><div id="cpu_stats" class="card-temp">-- °C | -- %</div></div>
-                     <div class="card"><span class="card-title" style="color:#9E9E9E">System (Misc)</span><div id="sys_w" class="card-val">0 W</div><div class="card-temp">Mobo/Ram/Fans</div></div>
-                </div>
                 <div class="stats">
                     <div class="row"><span class="label">Session</span><span id="cost_session" class="cost" style="color:#00E5FF">0.00 EGP</span></div>
                     <div class="row"><span class="label">Today</span><span id="cost_today" class="cost" style="color:#00FF00">0.00 EGP</span></div>
@@ -478,29 +409,27 @@ class PowerMonitorApp(ctk.CTk):
                             currentWatts = data.total_w; price = data.price_per_kwh;
                             document.getElementById('total_w').innerText = Math.round(data.total_w) + " W";
                             document.getElementById('peak_w').innerText = "Peak: " + Math.round(data.peak_w) + " W";
-                            document.getElementById('cpu_w').innerText = Math.round(data.cpu_w) + " W";
-                            document.getElementById('cpu_stats').innerText = Math.round(data.cpu_t) + " °C | " + Math.round(data.cpu_load) + " %";
-                            document.getElementById('igpu_w').innerText = Math.round(data.igpu_w) + " W";
-                            document.getElementById('igpu_stats').innerText = Math.round(data.igpu_t) + " °C | " + Math.round(data.igpu_load) + " %";
-                            document.getElementById('sys_w').innerText = Math.round(data.sys_w) + " W";
+                            
                             document.getElementById('cost_session').innerText = data.cost_session.toFixed(4) + " EGP";
                             document.getElementById('cost_today').innerText = data.cost_today.toFixed(4) + " EGP";
                             document.getElementById('cost_overall').innerText = data.cost_overall.toFixed(4) + " EGP";
                             document.getElementById('cost_est_month').innerText = data.cost_est_month.toFixed(2) + " EGP";
                             
-                            // Check alert using SHARED DATA's daily limit
-                            if (data.cost_today > data.daily_limit) {
-                                document.getElementById('cost_today').classList.add("alert");
-                            } else {
-                                document.getElementById('cost_today').classList.remove("alert");
-                            }
+                            if (data.cost_today > data.daily_limit) { document.getElementById('cost_today').style.color = '#FF4444'; }
+                            else { document.getElementById('cost_today').style.color = '#00FF00'; }
 
                             const grid = document.getElementById('gpu_grid'); grid.innerHTML = "";
+                            // NVIDIA GPUs
                             data.gpu_data.forEach(gpu => {
                                 let subText = Math.round(gpu.temp) + " °C | " + Math.round(gpu.load) + " %";
                                 if(gpu.vram_used > 1.0) { subText += "<br>VRAM: " + gpu.vram_used.toFixed(1) + " GB"; }
                                 grid.innerHTML += `<div class="card"><span class="card-title" style="color:#76b900">${gpu.name}</span><div class="card-val">${Math.round(gpu.power)} W</div><div class="card-temp">${subText}</div></div>`;
                             });
+                            // STATIC CARDS
+                            grid.innerHTML += `<div class="card"><span class="card-title" style="color:#E040FB">iGPU</span><div class="card-val">${Math.round(data.igpu_w)} W</div><div class="card-temp">${Math.round(data.igpu_t)} °C</div></div>`;
+                            grid.innerHTML += `<div class="card"><span class="card-title" style="color:#ff8c00">CPU</span><div class="card-val">${Math.round(data.cpu_w)} W</div><div class="card-temp">${Math.round(data.cpu_t)} °C</div></div>`;
+                            grid.innerHTML += `<div class="card"><span class="card-title" style="color:#9E9E9E">System</span><div class="card-val">${Math.round(data.sys_w)} W</div><div class="card-temp">Fixed</div></div>`;
+
                             recalc(1); recalc(2);
                         } catch (e) { console.log(e); }
                     }
@@ -697,6 +626,11 @@ class PowerMonitorApp(ctk.CTk):
                 if total_w > 500: self.lbl_watts.configure(text_color=COLOR_CRIT)
                 elif total_w > 300: self.lbl_watts.configure(text_color=COLOR_WARN)
                 else: self.lbl_watts.configure(text_color=COLOR_ACCENT)
+
+                # UPDATE GPU WIDGETS
+                for gpu in self.gpu_data:
+                    if gpu['widget_pwr']:
+                        gpu['widget_pwr'].configure(text=f"{int(pynvml.nvmlDeviceGetPowerUsage(gpu['handle']) / 1000.0)} W")
 
                 self.card_igpu['lbl_val'].configure(text=f"{int(igpu_w)} W")
                 self.card_igpu['lbl_temp'].configure(text=f"{int(igpu_t)} °C  |  {int(igpu_l)} %", text_color=self.get_color(igpu_t))
