@@ -46,7 +46,7 @@ SHARED_DATA = {
     "igpu_w": 0, "igpu_t": 0, "igpu_load": 0,
     "sys_w": 80, 
     "gpu_data": [], 
-    "has_igpu": False,  # <--- New Flag
+    "has_igpu": False,
     "cost_session": 0.0, "cost_today": 0.0, "cost_overall": 0.0, 
     "cost_est_month": 0.0,
     "time_session": "00:00:00",
@@ -91,18 +91,16 @@ class PowerMonitorApp(ctk.CTk):
         self.setup_nvml()
         self.detected_cpu_name = self.detect_cpu_name()
         
-        # 2. Check for iGPU Existence (The Fix)
-        # We fetch data ONCE here. If iGPU is 0W, we assume it's disabled.
+        # 2. Check for iGPU Existence
         lhm_data = self.fetch_lhm_data()
         self.has_igpu = False
         if lhm_data:
             initial_igpu_w = self.calculate_igpu_total(lhm_data)
-            if initial_igpu_w > 1.0: # Threshold of 1W to avoid noise
+            if initial_igpu_w > 1.0: 
                 self.has_igpu = True
         SHARED_DATA["has_igpu"] = self.has_igpu
 
         # 3. Window Calculation
-        # Cards = GPUs + CPU + System + (Maybe iGPU)
         num_cards = len(self.gpu_data) + 2 + (1 if self.has_igpu else 0)
         window_width = max(850, num_cards * 160 + 50)
         
@@ -375,8 +373,8 @@ class PowerMonitorApp(ctk.CTk):
                     h1 { margin-bottom: 5px; color: #a0a0a0; font-size: 16px; }
                     .watts { font-size: 60px; font-weight: bold; color: #00E5FF; margin: 0; }
                     .peak { color: gray; font-size: 14px; margin-bottom: 20px; }
-                    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
-                    .card { background: #2b2b2b; padding: 15px; border-radius: 10px; }
+                    .grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-bottom: 20px; }
+                    .card { background: #2b2b2b; padding: 15px; border-radius: 10px; width: 150px; }
                     .card-title { font-size: 12px; font-weight: bold; margin-bottom: 5px; display: block; }
                     .card-val { font-size: 22px; font-weight: bold; }
                     .card-temp { font-size: 11px; color: #a0a0a0; margin-top:5px; line-height: 1.4; }
