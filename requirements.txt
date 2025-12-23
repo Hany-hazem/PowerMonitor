@@ -1,0 +1,7 @@
+customtkinter
+flask
+matplotlib
+requests
+psutil
+pynvml
+packaging

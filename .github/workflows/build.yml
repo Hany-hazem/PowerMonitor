@@ -1,0 +1,57 @@
+name: Build Power Monitor Suite
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            name: PowerMonitor_Windows.exe
+          - os: ubuntu-latest
+            name: PowerMonitor_Linux.bin
+          - os: macos-latest
+            name: PowerMonitor_Mac.app
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install Dependencies
+      run: |
+        pip install -r requirements.txt
+
+    # --- WINDOWS BUILD ---
+    - name: Build Windows
+      if: matrix.os == 'windows-latest'
+      run: |
+        pyinstaller --noconsole --onefile --clean --collect-all customtkinter --hidden-import pynvml --hidden-import psutil --hidden-import requests --name "PowerMonitor_Windows" power_gui_web.pyw
+
+    # --- LINUX BUILD ---
+    - name: Build Linux
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        pyinstaller --noconsole --onefile --clean --collect-all customtkinter --hidden-import pynvml --hidden-import psutil --hidden-import requests --name "PowerMonitor_Linux" power_gui_web.pyw
+
+    # --- MAC BUILD ---
+    - name: Build Mac
+      if: matrix.os == 'macos-latest'
+      run: |
+        pyinstaller --noconsole --onefile --clean --collect-all customtkinter --hidden-import psutil --hidden-import requests --name "PowerMonitor_Mac" power_gui_web.pyw
+
+    # --- UPLOAD RESULT ---
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.name }}
+        path: dist/*
