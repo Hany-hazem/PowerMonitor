@@ -1,7 +1,9 @@
 customtkinter
 flask
 matplotlib
-requests
 psutil
-pynvml
+requests
 packaging
+pyinstaller
+# Linux/Windows only
+nvidia-ml-py; platform_system == "Linux" or platform_system == "Windows"
