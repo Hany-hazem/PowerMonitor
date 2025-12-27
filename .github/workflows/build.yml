@@ -47,7 +47,7 @@ jobs:
     - name: Build Mac
       if: matrix.os == 'macos-latest'
       run: |
-        pyinstaller --noconsole --onefile --clean --collect-all customtkinter --hidden-import psutil --hidden-import requests --name "PowerMonitor_Mac" power_gui_web.pyw
+        pyinstaller --noconsole --onedir --clean --collect-all customtkinter --hidden-import psutil --hidden-import requests --name "PowerMonitor_Mac" power_gui_web.pyw
 
     # --- UPLOAD RESULT ---
     - name: Upload Artifacts
