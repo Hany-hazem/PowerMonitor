@@ -4,7 +4,7 @@
 
 It is designed to give you deep insights into your system's efficiency, including a **"Power Task Manager"** that identifies exactly which processes are hogging your CPU load and GPU VRAM.
 
-![Dashboard Preview]([[https://github.com/user-attachments/assets/placeholder-image-b580aa.png](https://github.com/Hany-hazem/PowerMonitor/blob/main/Screenshot%202026-01-01%20155558.png)](https://github.com/Hany-hazem/PowerMonitor/blob/main/Screenshot%202026-01-01%20155558.png))
+<a href="https://github.com/Hany-hazem/PowerMonitor/blob/main/Screenshot%202026-01-01%20155558.png"><img src="https://raw.githubusercontent.com/Hany-hazem/PowerMonitor/main/Screenshot%202026-01-01%20155558.png"></a>
 
 ## 🌟 Key Features
 
